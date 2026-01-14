@@ -44,7 +44,7 @@ namespace AnalizadorVentasExcel
             CargarOpcionesDesglose();
 
             // 2. Título con Créditos
-            this.Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por TU NOMBRE";
+            this.Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por Mateo Sanabria Murcia";
         }
 
         private void LimpiarVersionesAntiguas()
