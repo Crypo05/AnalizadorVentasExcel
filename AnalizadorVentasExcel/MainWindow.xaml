@@ -3,10 +3,169 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:AnalizadorVentasExcel"
+        xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="Analizador Corporativo 2.0" Height="850" Width="1300"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <Style x:Key="CheckListStyle" TargetType="ListBox">
+            <Setter Property="SelectionMode" Value="Extended"/>
+            <Setter Property="BorderBrush" Value="#BDC3C7"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="MaxHeight" Value="100"/>
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="2"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border Background="{TemplateBinding Background}" Padding="2">
+                                        <CheckBox Content="{Binding}" 
+                                                  IsChecked="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected, Mode=TwoWay}"
+                                                  IsHitTestVisible="False"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="320"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#F4F6F6" BorderBrush="#D0D3D4" BorderThickness="0,0,1,0">
+            <Grid Margin="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="Panel de Control" FontSize="20" FontWeight="Bold" Margin="0,0,0,10" Foreground="#2C3E50"/>
+
+                <GroupBox Grid.Row="1" Header="1. Carga Masiva" Margin="0,0,0,5" BorderBrush="#BDC3C7">
+                    <StackPanel Margin="5">
+                        <TextBlock Text="Tipo de Negocio:" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                        <ComboBox x:Name="CmbTipoNegocio" Padding="5" Margin="0,0,0,10" SelectedIndex="0">
+                            <ComboBoxItem Content="Detección Automática"/>
+                            <ComboBoxItem Content="Minimarket (Detallado)"/>
+                            <ComboBoxItem Content="Souvenir (Agrupado)"/>
+                        </ComboBox>
+
+                        <Button x:Name="BtnCargarCarpeta" Content="📂 Seleccionar Carpeta" Height="30" Click="BtnCargarCarpeta_Click" Background="#2980B9" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
+                        <TextBlock x:Name="TxtEstadoArchivo" Text="Listo" FontSize="10" Margin="0,2,0,0" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Grid.Row="2" Header="2. Filtros" Margin="0,0,0,5" BorderBrush="#BDC3C7">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="5">
+                            <DockPanel LastChildFill="False">
+                                <TextBlock Text="Sucursales:" FontWeight="SemiBold"/>
+                                <Button Content="Todas" Click="BtnSelectAllSucursal_Click" DockPanel.Dock="Right" FontSize="9" Padding="2,0"/>
+                            </DockPanel>
+                            <ListBox x:Name="LstFiltroSucursal" Style="{StaticResource CheckListStyle}" SelectionChanged="AplicarFiltros_Event"/>
+
+                            <DockPanel LastChildFill="False" Margin="0,5,0,0">
+                                <TextBlock Text="Periodos:" FontWeight="SemiBold"/>
+                                <Button Content="Todos" Click="BtnSelectAllFecha_Click" DockPanel.Dock="Right" FontSize="9" Padding="2,0"/>
+                            </DockPanel>
+                            <ListBox x:Name="LstFiltroFecha" Style="{StaticResource CheckListStyle}" SelectionChanged="AplicarFiltros_Event"/>
+
+                            <DockPanel LastChildFill="False" Margin="0,5,0,0">
+                                <TextBlock Text="Proveedores:" FontWeight="SemiBold"/>
+                                <Button Content="Todos" Click="BtnSelectAllProv_Click" DockPanel.Dock="Right" FontSize="9" Padding="2,0"/>
+                            </DockPanel>
+                            <ListBox x:Name="LstFiltroProveedor" Style="{StaticResource CheckListStyle}" SelectionChanged="LstFiltroProveedor_SelectionChanged"/>
+
+                            <DockPanel LastChildFill="False" Margin="0,5,0,0">
+                                <TextBlock Text="Familias:" FontWeight="SemiBold"/>
+                                <Button Content="Todas" Click="BtnSelectAllFam_Click" DockPanel.Dock="Right" FontSize="9" Padding="2,0"/>
+                            </DockPanel>
+                            <ListBox x:Name="LstFiltroFamilia" Style="{StaticResource CheckListStyle}" SelectionChanged="AplicarFiltros_Event"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </GroupBox>
+
+                <GroupBox Grid.Row="3" Header="3. Gráfico" BorderBrush="#BDC3C7" Margin="0,0,0,5">
+                    <StackPanel Margin="5">
+                        <TextBlock Text="Eje Principal (X):" FontWeight="SemiBold"/>
+                        <ComboBox x:Name="CmbAgrupacion" SelectionChanged="AplicarFiltros_Event" Padding="4" Margin="0,0,0,5">
+                            <ComboBoxItem Content="Año Mes" IsSelected="True"/>
+                            <ComboBoxItem Content="Familia"/>
+                            <ComboBoxItem Content="Proveedor"/>
+                            <ComboBoxItem Content="Sucursal"/>
+                        </ComboBox>
+
+                        <TextBlock Text="Desglose (Series):" FontWeight="SemiBold"/>
+                        <ListBox x:Name="LstDesglose" Style="{StaticResource CheckListStyle}" SelectionChanged="AplicarFiltros_Event" Height="60" Margin="0,0,0,5"/>
+
+                        <TextBlock Text="Operación:" FontWeight="SemiBold"/>
+                        <ComboBox x:Name="CmbOperacion" SelectionChanged="AplicarFiltros_Event" Padding="4">
+                            <ComboBoxItem Content="Suma Total (Colones)" IsSelected="True"/>
+                            <ComboBoxItem Content="Promedio (% Utilidad)"/>
+                            <ComboBoxItem Content="Conteo (Transacciones)"/>
+                        </ComboBox>
+                    </StackPanel>
+                </GroupBox>
+
+                <StackPanel Grid.Row="4" Margin="5,10,5,0">
+                    <Separator Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Desarrollado por:" FontSize="10" Foreground="Gray" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Mateo Sanabria Murcia" FontSize="12" FontWeight="Bold" Foreground="#2C3E50" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="v1.0.0" VerticalAlignment="Center" Foreground="Gray" FontSize="10"/>
+                        <Button x:Name="BtnActualizar" Grid.Column="1" Content="🔄 Buscar Actualización" Click="BtnActualizar_Click" FontSize="10" Padding="5,2"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="15">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="5"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                <TextBlock x:Name="TxtTituloReporte" Text="Bienvenido" FontSize="20" FontWeight="Bold" Foreground="#34495E"/>
+                <TextBlock x:Name="TxtSubtitulo" Text="Seleccione una carpeta para iniciar" FontSize="14" Foreground="#7F8C8D"/>
+            </StackPanel>
+
+            <DataGrid x:Name="GridResultados" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" 
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                      BorderThickness="1" BorderBrush="#E5E7E9" Padding="5">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Concepto" Binding="{Binding Etiqueta}" Width="2*"/>
+                    <DataGridTextColumn Header="Detalle" Binding="{Binding DetalleSecundario}" Width="2*" FontSize="11" Foreground="DimGray"/>
+                    <DataGridTextColumn x:Name="ColumnaValor" Header="Total" Binding="{Binding ValorFormateado}" Width="*" FontWeight="Bold"/>
+                    <DataGridTextColumn Header="%" Binding="{Binding Participacion}" Width="0.5*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <GridSplitter Grid.Row="2" Height="5" HorizontalAlignment="Stretch" Background="#ECF0F1"/>
+
+            <Border Grid.Row="3" Margin="0,15,0,0" BorderBrush="#E5E7E9" BorderThickness="1" Padding="10" Background="White">
+                <lvc:CartesianChart x:Name="GraficoVentas" LegendPosition="Right"/>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
