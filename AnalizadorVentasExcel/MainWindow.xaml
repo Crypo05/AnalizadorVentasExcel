@@ -5,8 +5,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
         mc:Ignorable="d"
-        Title="Analizador Corporativo 2.0" Height="850" Width="1300"
+        Title="Analizador Corporativo" Height="850" Width="1300"
         WindowStartupLocation="CenterScreen">
+
     <Window.Resources>
         <Style x:Key="CheckListStyle" TargetType="ListBox">
             <Setter Property="SelectionMode" Value="Extended"/>
@@ -105,6 +106,7 @@
                             <ComboBoxItem Content="Familia"/>
                             <ComboBoxItem Content="Proveedor"/>
                             <ComboBoxItem Content="Sucursal"/>
+                            <ComboBoxItem Content="Articulo"/>
                         </ComboBox>
 
                         <TextBlock Text="Desglose (Series):" FontWeight="SemiBold"/>
@@ -113,7 +115,7 @@
                         <TextBlock Text="Operación:" FontWeight="SemiBold"/>
                         <ComboBox x:Name="CmbOperacion" SelectionChanged="AplicarFiltros_Event" Padding="4">
                             <ComboBoxItem Content="Suma Total (Colones)" IsSelected="True"/>
-                            <ComboBoxItem Content="Promedio (% Utilidad)"/>
+                           
                             <ComboBoxItem Content="Conteo (Transacciones)"/>
                         </ComboBox>
                     </StackPanel>
@@ -123,7 +125,7 @@
                     <Separator Margin="0,0,0,10"/>
 
                     <TextBlock Text="Desarrollado por:" FontSize="10" Foreground="Gray" HorizontalAlignment="Center"/>
-                    <TextBlock Text="Mateo Sanabria Murcia" FontSize="12" FontWeight="Bold" Foreground="#2C3E50" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                    <TextBlock Text="MATEO SANABRIA" FontSize="12" FontWeight="Bold" Foreground="#2C3E50" HorizontalAlignment="Center" Margin="0,0,0,10"/>
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -131,7 +133,7 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="v1.0.0" VerticalAlignment="Center" Foreground="Gray" FontSize="10"/>
-                        <Button x:Name="BtnActualizar" Grid.Column="1" Content="🔄 Buscar Actualización" Click="BtnActualizar_Click" FontSize="10" Padding="5,2"/>
+                        <Button x:Name="BtnActualizar" Grid.Column="1" Content="🔄 Actualizar" Click="BtnActualizar_Click" FontSize="10" Padding="5,2"/>
                     </Grid>
                 </StackPanel>
             </Grid>
@@ -156,8 +158,12 @@
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Concepto" Binding="{Binding Etiqueta}" Width="2*"/>
                     <DataGridTextColumn Header="Detalle" Binding="{Binding DetalleSecundario}" Width="2*" FontSize="11" Foreground="DimGray"/>
-                    <DataGridTextColumn x:Name="ColumnaValor" Header="Total" Binding="{Binding ValorFormateado}" Width="*" FontWeight="Bold"/>
-                    <DataGridTextColumn Header="%" Binding="{Binding Participacion}" Width="0.5*"/>
+
+                    <DataGridTextColumn x:Name="ColumnaValor" Header="Venta Total" Binding="{Binding ValorFormateado}" Width="*" FontWeight="Bold"/>
+
+                    <DataGridTextColumn Header="% Utilidad" Binding="{Binding MargenFormateado}" Width="0.8*" FontWeight="SemiBold" Foreground="#27AE60"/>
+
+                    <DataGridTextColumn Header="% Part." Binding="{Binding Participacion}" Width="0.5*" Foreground="Gray"/>
                 </DataGrid.Columns>
             </DataGrid>
 

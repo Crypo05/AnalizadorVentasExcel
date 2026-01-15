@@ -14,7 +14,7 @@ using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
 using SkiaSharp;
 using LiveChartsCore.Measure;
-using LiveChartsCore.Kernel; // ¡IMPORTANTE! Necesario para ChartPoint
+using LiveChartsCore.Kernel; // Necesario para ChartPoint
 
 namespace AnalizadorVentasExcel
 {
@@ -24,9 +24,9 @@ namespace AnalizadorVentasExcel
         // CONFIGURACIÓN DE LA APLICACIÓN
         // ==========================================
         private const string VersionActual = "1.0.0";
-        // URL RAW del archivo de texto con la versión (ej: 1.0.1)
+        // Enlace RAW al archivo de texto con el número de versión (ej: 1.0.1)
         private const string UrlVersionRemota = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/version.txt";
-        // URL de descarga del ejecutable nuevo
+        // Enlace RAW directo al ejecutable (.exe)
         private const string UrlDescarga = "https://github.com/TU_USUARIO/TU_REPO/raw/main/AnalizadorVentasExcel.exe";
 
         private List<VentaItem> _datosGlobales = new List<VentaItem>();
@@ -44,7 +44,7 @@ namespace AnalizadorVentasExcel
             CargarOpcionesDesglose();
 
             // 2. Título con Créditos
-            this.Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por Mateo Sanabria Murcia";
+            this.Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por Mateo Sanabria";
         }
 
         private void LimpiarVersionesAntiguas()
@@ -66,6 +66,7 @@ namespace AnalizadorVentasExcel
 
         private void ConfigurarCulturaManual()
         {
+            // Forzamos la cultura de Costa Rica para asegurar el símbolo de Colones
             _culturaCR = (CultureInfo)CultureInfo.CreateSpecificCulture("es-CR").Clone();
             _culturaCR.NumberFormat.CurrencySymbol = "₡";
             _culturaCR.NumberFormat.CurrencyDecimalDigits = 2;
@@ -89,11 +90,11 @@ namespace AnalizadorVentasExcel
                 using (HttpClient client = new HttpClient())
                 {
                     // Añadimos timestamp para evitar caché
-                    string versionRemota = await client.GetStringAsync(UrlVersionRemota + $"?t={DateTime.Now.Ticks}");
-                    versionRemota = versionRemota.Trim();
+                    // string versionRemota = await client.GetStringAsync(UrlVersionRemota + $"?t={DateTime.Now.Ticks}");
+                    // versionRemota = versionRemota.Trim();
 
-                    // SI USAS LOCAL/PRUEBAS, COMENTA LO DE ARRIBA Y USA ESTO:
-                    // string versionRemota = "1.0.0"; 
+                    // PARA PRUEBAS LOCALES (COMENTA ESTO Y DESCOMENTA LO DE ARRIBA EN PRODUCCION):
+                    string versionRemota = "1.0.0";
 
                     if (versionRemota != VersionActual)
                     {
@@ -104,23 +105,19 @@ namespace AnalizadorVentasExcel
                         {
                             BtnActualizar.Content = "Descargando...";
 
-                            // Rutas para el SWAP de archivos
                             string rutaActual = Process.GetCurrentProcess().MainModule.FileName;
                             string rutaNueva = rutaActual + ".new";
                             string rutaVieja = rutaActual + ".old";
 
-                            // Descargar
                             byte[] fileBytes = await client.GetByteArrayAsync(UrlDescarga);
                             File.WriteAllBytes(rutaNueva, fileBytes);
 
-                            // Renombrar
                             if (File.Exists(rutaVieja)) File.Delete(rutaVieja);
                             File.Move(rutaActual, rutaVieja);
                             File.Move(rutaNueva, rutaActual);
 
                             MessageBox.Show("Actualización completada. La aplicación se reiniciará.", "Éxito");
 
-                            // Reiniciar
                             Process.Start(rutaActual);
                             Application.Current.Shutdown();
                         }
@@ -267,7 +264,7 @@ namespace AnalizadorVentasExcel
         private void AplicarFiltros_Event(object sender, SelectionChangedEventArgs e) { if (!_cargandoFiltros) AplicarFiltros(); }
 
         // ==========================================
-        // 4. MOTOR DE ANÁLISIS (PIVOT)
+        // 4. MOTOR DE ANÁLISIS (PIVOT + MARGENES)
         // ==========================================
         private void AplicarFiltros()
         {
@@ -300,6 +297,12 @@ namespace AnalizadorVentasExcel
 
             double sumaGlobal = datos.Sum(x => (double)x.TotalVenta);
 
+            // Función auxiliar para calcular margen promedio del grupo
+            Func<IEnumerable<VentaItem>, double> calcMargen = (grupo) => {
+                if (!grupo.Any()) return 0;
+                return (double)grupo.Average(x => x.PorcentajeUtilidad);
+            };
+
             // Generar Tabla
             List<ResumenDinamico> resumenTabla;
 
@@ -312,6 +315,7 @@ namespace AnalizadorVentasExcel
                         Etiqueta = g.Key.KeyX,
                         DetalleSecundario = g.Key.KeySerie,
                         ValorNumerico = CalcularValor(g, operacion),
+                        MargenPromedio = calcMargen(g), // <--- Cálculo de Margen
                         TipoFormato = operacion,
                         Participacion = (operacion.Contains("Suma") && sumaGlobal > 0) ? (CalcularValor(g, operacion) / sumaGlobal).ToString("P1", _culturaCR) : "-"
                     })
@@ -326,6 +330,7 @@ namespace AnalizadorVentasExcel
                         Etiqueta = g.Key,
                         DetalleSecundario = "Total General",
                         ValorNumerico = CalcularValor(g, operacion),
+                        MargenPromedio = calcMargen(g), // <--- Cálculo de Margen
                         TipoFormato = operacion,
                         Participacion = (operacion.Contains("Suma") && sumaGlobal > 0) ? (CalcularValor(g, operacion) / sumaGlobal).ToString("P1", _culturaCR) : "-"
                     })
@@ -339,7 +344,7 @@ namespace AnalizadorVentasExcel
             if (ColumnaValor != null) ColumnaValor.Header = operacion;
 
             TxtTituloReporte.Text = hayDesglose ? $"Análisis: {ejeX} vs Series" : $"Total por {ejeX}";
-            TxtSubtitulo.Text = $"{datos.Count} registros analizados.";
+            TxtSubtitulo.Text = $"{datos.Count} registros filtrados.";
 
             ActualizarGraficoMultiNivel(datos, ejeX, dimensionesSerie, operacion);
         }
@@ -393,15 +398,14 @@ namespace AnalizadorVentasExcel
 
             var listaSeries = new List<ISeries>();
 
-            // --- FORMATEADOR ANTI-CEROS ---
+            // Función Lambda para ocultar ceros en el Tooltip
             Func<ChartPoint, string> tooltipCleaner = point => {
-                // PrimaryValue obtiene el valor numérico (Y) del punto
+                // Usamos PrimaryValue (genérico para Charts)
                 double val = point.PrimaryValue;
                 // Si es casi cero, retornamos null (oculta la etiqueta del tooltip)
                 if (Math.Abs(val) < 0.01) return null;
                 return $"{point.Context.Series.Name}: {val.ToString("N0", _culturaCR)}";
             };
-            // ------------------------------
 
             if (hayDesglose)
             {
@@ -491,8 +495,10 @@ namespace AnalizadorVentasExcel
         public string Etiqueta { get; set; }
         public string DetalleSecundario { get; set; }
         public double ValorNumerico { get; set; }
+        public double MargenPromedio { get; set; } // Propiedad para la utilidad
         public string TipoFormato { get; set; }
         public string Participacion { get; set; }
+
         public string ValorFormateado
         {
             get
@@ -503,6 +509,15 @@ namespace AnalizadorVentasExcel
                 if (TipoFormato.Contains("Suma")) return ValorNumerico.ToString("C2", nfi);
                 if (TipoFormato.Contains("Promedio")) return ValorNumerico.ToString("P2", nfi);
                 return ValorNumerico.ToString("N0", nfi);
+            }
+        }
+
+        public string MargenFormateado
+        {
+            get
+            {
+                var cr = CultureInfo.GetCultureInfo("es-CR");
+                return MargenPromedio.ToString("P2", cr);
             }
         }
     }
@@ -534,7 +549,8 @@ namespace AnalizadorVentasExcel
                         else if (val.Contains("proveedor")) colProv = cell.Address.ColumnNumber;
                         else if (val.Contains("familia")) colFam = cell.Address.ColumnNumber;
                         else if (val == "total" || val == "total venta" || val == "total total") colTotal = cell.Address.ColumnNumber;
-                        else if (val.Contains("utilidad")) colUtil = cell.Address.ColumnNumber;
+                        // Detector mejorado de utilidad
+                        else if (val.Contains("utilidad") || val.Contains("%")) colUtil = cell.Address.ColumnNumber;
                     }
                     if (colTotal != -1 && (colFam != -1 || colProv != -1)) { encabezadoRow = row; break; }
                 }
@@ -553,7 +569,7 @@ namespace AnalizadorVentasExcel
                 {
                     try
                     {
-                        // Fill Down (Relleno hacia abajo)
+                        // Fill Down
                         if (colFecha != -1 && !row.Cell(colFecha).IsEmpty())
                         {
                             var c = row.Cell(colFecha);
@@ -562,11 +578,11 @@ namespace AnalizadorVentasExcel
                         if (colProv != -1 && !row.Cell(colProv).IsEmpty())
                         {
                             string p = row.Cell(colProv).GetString();
-                            if (!p.Contains("Total")) ultProv = p;
+                            if (!p.ToLower().Contains("total")) ultProv = p;
                         }
                         if (colFam != -1 && !row.Cell(colFam).IsEmpty()) ultFam = row.Cell(colFam).GetString();
 
-                        // Filtros Anti-Duplicados
+                        // Filtros
                         if (esMinimarket)
                         {
                             if (colCodigo != -1 && row.Cell(colCodigo).IsEmpty()) continue;
@@ -574,20 +590,20 @@ namespace AnalizadorVentasExcel
                         else
                         {
                             if (colFam != -1 && row.Cell(colFam).IsEmpty()) continue;
-                            // En Souvenir, si el proveedor dice "Total" es una fila de suma, saltar
-                            if (colProv != -1 && !row.Cell(colProv).IsEmpty() && row.Cell(colProv).GetString().Contains("Total")) continue;
+                            if (colProv != -1 && !row.Cell(colProv).IsEmpty() && row.Cell(colProv).GetString().ToLower().Contains("total")) continue;
                         }
 
-                        // Lectura de Valores
+                        // VENTA
                         var celdaTotal = row.Cell(colTotal);
                         if (celdaTotal.IsEmpty()) continue;
 
                         decimal total = 0;
                         if (celdaTotal.DataType == XLDataType.Number) total = (decimal)celdaTotal.GetDouble();
-                        else decimal.TryParse(celdaTotal.GetString(), out total);
+                        else ParseDecimalFlexible(celdaTotal.GetString(), out total);
 
                         if (total == 0) continue;
 
+                        // UTILIDAD
                         decimal utilidad = 0;
                         if (colUtil != -1)
                         {
@@ -595,11 +611,10 @@ namespace AnalizadorVentasExcel
                             if (!cu.IsEmpty())
                             {
                                 if (cu.DataType == XLDataType.Number) utilidad = (decimal)cu.GetDouble();
-                                else decimal.TryParse(cu.GetString(), out utilidad);
+                                else ParseDecimalFlexible(cu.GetString(), out utilidad);
                             }
                         }
 
-                        // Guardado seguro
                         if (!string.IsNullOrEmpty(ultPeriodo) && !ultPeriodo.ToLower().Contains("año"))
                         {
                             lista.Add(new VentaItem
@@ -619,6 +634,19 @@ namespace AnalizadorVentasExcel
                 }
             }
             return lista;
+        }
+
+        private void ParseDecimalFlexible(string texto, out decimal resultado)
+        {
+            resultado = 0;
+            if (string.IsNullOrWhiteSpace(texto)) return;
+            string limpio = texto.Replace("%", "").Replace("$", "").Replace("₡", "").Trim();
+
+            // Intento 1: Invariante (Punto)
+            if (decimal.TryParse(limpio, NumberStyles.Any, CultureInfo.InvariantCulture, out resultado)) return;
+            // Intento 2: Cultura CR (Coma)
+            var culturaCR = CultureInfo.GetCultureInfo("es-CR");
+            if (decimal.TryParse(limpio, NumberStyles.Any, culturaCR, out resultado)) return;
         }
     }
 }
