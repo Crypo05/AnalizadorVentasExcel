@@ -65,6 +65,14 @@
 
                         <Button x:Name="BtnCargarCarpeta" Content="📂 Seleccionar Carpeta" Height="30" Click="BtnCargarCarpeta_Click" Background="#2980B9" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
                         <TextBlock x:Name="TxtEstadoArchivo" Text="Listo" FontSize="10" Margin="0,2,0,0" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                        <GroupBox Header="Herramientas Avanzadas" Margin="0,0,0,10" BorderBrush="#BDC3C7">
+                            <StackPanel Margin="5">
+                                <Button x:Name="BtnAuditar" Content="🔍 Auditar Anomalías" Height="30" 
+                Click="BtnAuditar_Click" Background="#E67E22" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
+                                <TextBlock Text="Detecta descripciones diferentes y márgenes bajos." FontSize="9" Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </GroupBox>
+
                     </StackPanel>
                 </GroupBox>
 
@@ -163,7 +171,7 @@
 
                     <DataGridTextColumn Header="% Utilidad" Binding="{Binding MargenFormateado}" Width="0.8*" FontWeight="SemiBold" Foreground="#27AE60"/>
 
-                    <DataGridTextColumn Header="% Part." Binding="{Binding Participacion}" Width="0.5*" Foreground="Gray"/>
+                    <DataGridTextColumn x:Name="ColumnaParticipacion" Header="% Part." Binding="{Binding Participacion}" Width="1.2*" Foreground="#E74C3C" FontWeight="Medium"/>
                 </DataGrid.Columns>
             </DataGrid>
 
