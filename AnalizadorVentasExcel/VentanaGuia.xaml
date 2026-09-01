@@ -1,0 +1,97 @@
+﻿<Window x:Class="AnalizadorVentasExcel.VentanaGuia"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Guía de uso — Analizador Corporativo"
+        Height="760" Width="900"
+        WindowStartupLocation="CenterOwner"
+        Background="White">
+
+    <Window.Resources>
+        <Style x:Key="TituloSeccion" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#2C3E50"/>
+            <Setter Property="Margin" Value="0,22,0,4"/>
+        </Style>
+        <Style x:Key="ResumenSeccion" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#7F8C8D"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <DataTemplate x:Key="PlantillaEntrada">
+            <Border Background="#F8F9F9" BorderBrush="#E5E7E9" BorderThickness="1" CornerRadius="3"
+                    Padding="10,7" Margin="0,0,0,6">
+                <StackPanel>
+                    <TextBlock Text="{Binding Nombre}" FontWeight="SemiBold" FontSize="13"
+                               Foreground="#21618C" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Descripcion}" FontSize="12.5" Foreground="#34495E"
+                               TextWrapping="Wrap" Margin="0,3,0,0" LineHeight="19"/>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="PlantillaSeccion">
+            <StackPanel>
+                <TextBlock Text="{Binding Titulo}" Style="{StaticResource TituloSeccion}"/>
+                <TextBlock Text="{Binding Resumen}" Style="{StaticResource ResumenSeccion}"/>
+                <ItemsControl ItemsSource="{Binding Entradas}" ItemTemplate="{StaticResource PlantillaEntrada}"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="PlantillaReceta">
+            <Border Background="#FEF9E7" BorderBrush="#F7DC6F" BorderThickness="1" CornerRadius="3"
+                    Padding="10,7" Margin="0,0,0,6">
+                <StackPanel>
+                    <TextBlock Text="{Binding Objetivo}" FontWeight="SemiBold" FontSize="13"
+                               Foreground="#7D6608" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Pasos}" FontSize="12.5" Foreground="#34495E"
+                               TextWrapping="Wrap" Margin="0,3,0,0" LineHeight="19"/>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#2C3E50" Padding="20,14">
+            <StackPanel>
+                <TextBlock Text="Guía de uso" FontSize="22" FontWeight="Bold" Foreground="White"/>
+                <TextBlock x:Name="TxtSubtituloGuia" FontSize="12" Foreground="#AEB6BF" Margin="0,2,0,0"
+                           Text="Todas las funciones del programa, una por una, y cómo combinarlas."/>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,0,20,0">
+            <StackPanel Margin="0,0,6,20">
+
+                <ItemsControl x:Name="ListaSecciones" ItemTemplate="{StaticResource PlantillaSeccion}"/>
+
+                <TextBlock Text="6. Combinaciones útiles" Style="{StaticResource TituloSeccion}"/>
+                <TextBlock Style="{StaticResource ResumenSeccion}"
+                           Text="Recetas concretas: qué poner en cada control para responder una pregunta de negocio."/>
+                <ItemsControl x:Name="ListaRecetas" ItemTemplate="{StaticResource PlantillaReceta}"/>
+
+                <TextBlock Text="7. Cosas que conviene saber de los datos" Style="{StaticResource TituloSeccion}"/>
+                <TextBlock Style="{StaticResource ResumenSeccion}"
+                           Text="Limitaciones reales del cálculo y del archivo de origen. Leerlas evita malinterpretar los números."/>
+                <ItemsControl x:Name="ListaNotas" ItemTemplate="{StaticResource PlantillaEntrada}"/>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="#F4F6F6" BorderBrush="#D0D3D4" BorderThickness="0,1,0,0" Padding="20,10">
+            <Grid>
+                <TextBlock x:Name="TxtPie" VerticalAlignment="Center" FontSize="11" Foreground="#7F8C8D"/>
+                <Button Content="Cerrar" HorizontalAlignment="Right" Padding="18,5" Click="BtnCerrar_Click"
+                        Background="#2980B9" Foreground="White" FontWeight="Bold" Cursor="Hand" BorderThickness="0"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Datos de prueba: ventas reales de las tiendas, no deben publicarse
+Prueva/

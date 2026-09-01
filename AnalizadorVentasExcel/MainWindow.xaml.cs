@@ -1,36 +1,57 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Diagnostics;
-using System.Net.Http;
-using Microsoft.Win32;
-using ClosedXML.Excel;
+using System.Windows.Data;
+using System.Windows.Threading;
+using AnalizadorVentasExcel.Modelos;
+using AnalizadorVentasExcel.Servicios;
 using LiveChartsCore;
+using LiveChartsCore.Kernel;
+using LiveChartsCore.Measure;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
+using Microsoft.Win32;
 using SkiaSharp;
-using LiveChartsCore.Measure;
-using LiveChartsCore.Kernel;
 
 namespace AnalizadorVentasExcel
 {
     public partial class MainWindow : Window
     {
-        // ==========================================
-        // CONFIGURACIÓN
-        // ==========================================
-        private const string VersionActual = "1.6.0"; // Versión Gráfico Multi-Sucursal
-        private const string UrlVersionRemota = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/version.txt";
-        private const string UrlDescarga = "https://github.com/TU_USUARIO/TU_REPO/raw/main/AnalizadorVentasExcel.exe";
+        public const string VersionActual = "1.7.0";
 
-        private List<VentaItem> _datosGlobales = new List<VentaItem>();
-        private bool _cargandoFiltros = false;
-        private bool _modoExploracion = false;
-        private CultureInfo _culturaCR;
+        private AnalisisService? _motor;
+        private bool _cargandoFiltros;
+        private bool _modoExploracion;
+        private bool _ocupado;
+        private CultureInfo _culturaCR = CultureInfo.InvariantCulture;
+
+        private List<AnalisisService.ProductoExplorado> _productosExplorados = new();
+
+        // Colecciones de los checklists. La selección vive aquí (en OpcionFiltro), no en
+        // ListBox.SelectedItems, para que el buscador pueda ocultar elementos sin desmarcarlos.
+        private readonly List<OpcionFiltro> _opSucursales = new();
+        private readonly List<OpcionFiltro> _opPeriodos = new();
+        private readonly List<OpcionFiltro> _opProveedores = new();
+        private readonly List<OpcionFiltro> _opFamilias = new();
+        private readonly List<OpcionFiltro> _opDesglose = new();
+
+        /// <summary>La lista de familias depende de proveedores y sucursales; se reconstruye
+        /// dentro del recálculo agrupado, no una vez por casilla marcada.</summary>
+        private bool _familiasDesactualizadas;
+
+        /// <summary>
+        /// Los checklists disparan SelectionChanged una vez por elemento; con "Seleccionar
+        /// todas" eso lanzaba un recálculo completo por cada sucursal/periodo/proveedor.
+        /// El temporizador agrupa la ráfaga en un único recálculo.
+        /// </summary>
+        private readonly DispatcherTimer _temporizadorFiltros;
 
         public MainWindow()
         {
@@ -38,376 +59,549 @@ namespace AnalizadorVentasExcel
             LimpiarVersionesAntiguas();
             ConfigurarCulturaManual();
             CargarOpcionesDesglose();
-            this.Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por Mateo Sanabria";
 
-            // Evento para ver detalle al seleccionar un producto
+            _temporizadorFiltros = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(120)
+            };
+            _temporizadorFiltros.Tick += (_, _) =>
+            {
+                _temporizadorFiltros.Stop();
+                if (_familiasDesactualizadas)
+                {
+                    _familiasDesactualizadas = false;
+                    ActualizarChecklistFamilias();
+                }
+                AplicarFiltros();
+            };
+
+            TxtVersion.Text = $"v{VersionActual}";
+            Title = $"Analizador Corporativo v{VersionActual} | Desarrollado por Mateo Sanabria";
+
             GridResultados.SelectionChanged += GridResultados_SelectionChanged;
         }
 
         // ==========================================
-        // MODO EXPLORADOR
+        // CARGA
+        // ==========================================
+        private async void BtnCargarCarpeta_Click(object sender, RoutedEventArgs e)
+        {
+            if (_ocupado) return;
+
+            var dialog = new OpenFileDialog
+            {
+                Title = "Seleccione un archivo Excel de la carpeta a analizar",
+                Filter = "Excel|*.xlsx;*.xls",
+                CheckFileExists = true
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            string? carpeta = Path.GetDirectoryName(dialog.FileName);
+            if (string.IsNullOrEmpty(carpeta)) return;
+
+            string[] archivos;
+            try
+            {
+                archivos = Directory.GetFiles(carpeta, "*.xls*")
+                                    .Where(a => !Path.GetFileName(a).StartsWith("~$", StringComparison.Ordinal))
+                                    .OrderBy(a => a, StringComparer.CurrentCulture)
+                                    .ToArray();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo leer la carpeta:\n{ex.Message}", "Error");
+                return;
+            }
+
+            if (archivos.Length == 0)
+            {
+                TxtEstadoArchivo.Text = "La carpeta no contiene archivos Excel.";
+                TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Red;
+                return;
+            }
+
+            // Se descarta el conjunto anterior antes de leer el nuevo, para no tener dos
+            // cargas completas vivas a la vez.
+            _motor = null;
+            _modoExploracion = false;
+            _productosExplorados = new List<AnalisisService.ProductoExplorado>();
+            _temporizadorFiltros.Stop();
+
+            var cronometro = Stopwatch.StartNew();
+            EstablecerOcupado(true, $"Leyendo {archivos.Length} archivos...");
+
+            try
+            {
+                var progreso = new Progress<string>(t => TxtEstadoArchivo.Text = t);
+                string? modo = (CmbTipoNegocio.SelectedItem as ComboBoxItem)?.Content?.ToString();
+
+                // La lectura corre fuera del hilo de UI: la ventana sigue respondiendo.
+                var resultado = await new ExcelService().CargarCarpetaAsync(archivos, modo, progreso);
+                cronometro.Stop();
+
+                if (resultado.Datos.Count == 0)
+                {
+                    _motor = null;
+                    TxtEstadoArchivo.Text = "No se encontraron datos.";
+                    TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Red;
+                    LimpiarVista();
+                }
+                else
+                {
+                    _motor = new AnalisisService(resultado.Datos);
+                    TxtEstadoArchivo.Text =
+                        $"Carga OK: {resultado.ArchivosLeidos} archivos, " +
+                        $"{resultado.Datos.Count.ToString("N0", _culturaCR)} filas en " +
+                        $"{cronometro.Elapsed.TotalSeconds:N1} s.";
+                    TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Green;
+
+                    InicializarFiltros(resultado.Datos);
+                    AplicarFiltros();
+                }
+
+                if (resultado.Errores.Count > 0)
+                    MessageBox.Show("Archivos con problemas:\n" + string.Join("\n", resultado.Errores), "Aviso");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Error al cargar");
+                TxtEstadoArchivo.Text = "Error en la carga.";
+                TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Red;
+            }
+            finally
+            {
+                EstablecerOcupado(false, null);
+            }
+        }
+
+        private void EstablecerOcupado(bool ocupado, string? mensaje)
+        {
+            _ocupado = ocupado;
+            BarraProgreso.Visibility = ocupado ? Visibility.Visible : Visibility.Collapsed;
+            BtnCargarCarpeta.IsEnabled = !ocupado;
+            BtnAuditar.IsEnabled = !ocupado;
+            Cursor = ocupado ? System.Windows.Input.Cursors.Wait : null;
+            if (mensaje != null)
+            {
+                TxtEstadoArchivo.Text = mensaje;
+                TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.DimGray;
+            }
+        }
+
+        private void LimpiarVista()
+        {
+            GridResultados.ItemsSource = null;
+            GraficoVentas.Series = Array.Empty<ISeries>();
+            foreach (var lb in new[] { LstFiltroSucursal, LstFiltroFecha, LstFiltroProveedor, LstFiltroFamilia })
+                lb.ItemsSource = null;
+        }
+
+        // ==========================================
+        // ANÁLISIS PRINCIPAL
+        // ==========================================
+        private void AplicarFiltros()
+        {
+            _modoExploracion = false;
+            if (_motor == null || GridResultados == null || CmbAgrupacion == null) return;
+
+            ColumnaParticipacion.Header = "% Part.";
+
+            var ejeX = ConjuntoDatos.DesdeTexto((CmbAgrupacion.SelectedItem as ComboBoxItem)?.Content?.ToString());
+            string? textoOperacion = (CmbOperacion.SelectedItem as ComboBoxItem)?.Content?.ToString();
+            if (ejeX == null || textoOperacion == null) return;
+
+            var sucursales = ObtenerSeleccionados(_opSucursales);
+            if (sucursales.Count == 0) { GridResultados.ItemsSource = null; GraficoVentas.Series = Array.Empty<ISeries>(); return; }
+
+            var peticion = new PeticionAnalisis
+            {
+                EjeX = ejeX.Value,
+                Desglose = ObtenerSeleccionados(_opDesglose)
+                    .Select(ConjuntoDatos.DesdeTexto)
+                    .Where(d => d != null).Select(d => d!.Value).ToList(),
+                Operacion = textoOperacion.Contains("Suma") ? Operacion.Suma
+                          : textoOperacion.Contains("Promedio") ? Operacion.Promedio
+                          : Operacion.Conteo,
+                TextoOperacion = textoOperacion,
+                Sucursales = sucursales,
+                Periodos = ObtenerSeleccionados(_opPeriodos),
+                Proveedores = ObtenerSeleccionados(_opProveedores),
+                Familias = ObtenerSeleccionados(_opFamilias)
+            };
+
+            var resultado = _motor.Analizar(peticion);
+
+            GridResultados.ItemsSource = resultado.Tabla;
+            ColumnaValor.Header = textoOperacion;
+
+            string nombreEje = (CmbAgrupacion.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
+            TxtTituloReporte.Text = peticion.Desglose.Count > 0
+                ? $"Análisis: {nombreEje} vs Series"
+                : $"Total por {nombreEje}";
+            TxtSubtitulo.Text = $"{resultado.FilasFiltradas.ToString("N0", _culturaCR)} registros filtrados.";
+
+            DibujarGrafico(resultado);
+        }
+
+        private void DibujarGrafico(ResultadoAnalisis resultado)
+        {
+            GraficoVentas.TooltipFindingStrategy = TooltipFindingStrategy.CompareOnlyX;
+
+            // Devolver null oculta la entrada del tooltip para los valores ~0, igual que antes.
+            Func<ChartPoint, string> etiqueta = punto =>
+            {
+                double v = punto.Coordinate.PrimaryValue;
+                return Math.Abs(v) < 0.01 ? null! : $"{punto.Context.Series.Name}: {v.ToString("N0", _culturaCR)}";
+            };
+
+            var series = new List<ISeries>(resultado.Series.Count);
+            for (int i = 0; i < resultado.Series.Count; i++)
+            {
+                var s = resultado.Series[i];
+                series.Add(SerieLinea(s.Nombre, s.Valores, ColorSerie(i), etiqueta));
+            }
+
+            GraficoVentas.Series = series;
+            GraficoVentas.XAxes = new[] { new Axis { Labels = resultado.EtiquetasX, LabelsRotation = 25, TextSize = 11 } };
+            GraficoVentas.YAxes = new[] { new Axis { Labeler = v => v.ToString("N0", _culturaCR) } };
+        }
+
+        /// <summary>
+        /// Paleta fija para las series. Antes el trazo se creaba con
+        /// <c>new SolidColorPaint { StrokeThickness = 3 }</c>, sin color: el valor por
+        /// defecto de SKColor es transparente, así que la línea no se pintaba y sólo
+        /// quedaban los puntos (de ahí el aspecto de diagrama de dispersión).
+        /// </summary>
+        private static readonly SKColor[] Paleta =
+        {
+            new SKColor(0x29, 0x80, 0xB9), // azul
+            new SKColor(0xE7, 0x4C, 0x3C), // rojo
+            new SKColor(0x27, 0xAE, 0x60), // verde
+            new SKColor(0xE6, 0x7E, 0x22), // naranja
+            new SKColor(0x8E, 0x44, 0xAD), // morado
+            new SKColor(0x16, 0xA0, 0x85), // turquesa
+            new SKColor(0xD3, 0x54, 0x00), // teja
+            new SKColor(0x2C, 0x3E, 0x50), // azul oscuro
+            new SKColor(0xC0, 0x39, 0x2B), // rojo oscuro
+            new SKColor(0x7F, 0x8C, 0x8D)  // gris
+        };
+
+        private static SKColor ColorSerie(int indice) => Paleta[indice % Paleta.Length];
+
+        /// <summary>Serie de línea con trazo y puntos visibles.</summary>
+        private static LineSeries<double> SerieLinea(string nombre, double[] valores, SKColor color,
+                                                     Func<ChartPoint, string> etiqueta)
+            => new LineSeries<double>
+            {
+                Name = nombre,
+                Values = valores,
+                LineSmoothness = 0,
+                GeometrySize = 9,
+                Stroke = new SolidColorPaint(color) { StrokeThickness = 3 },
+                GeometryFill = new SolidColorPaint(color),
+                GeometryStroke = new SolidColorPaint(SKColors.White) { StrokeThickness = 2 },
+                Fill = null, // sin área bajo la línea: con varias series se taparían entre sí
+                YToolTipLabelFormatter = etiqueta
+            };
+
+        // ==========================================
+        // EXPLORADOR DE PRODUCTOS
         // ==========================================
         private void BtnAuditar_Click(object sender, RoutedEventArgs e)
         {
-            if (!_datosGlobales.Any())
+            if (_motor == null) { MessageBox.Show("Primero cargue datos.", "Sin Datos"); return; }
+
+            // Un recálculo pendiente por el temporizador de filtros sobrescribiría el
+            // explorador justo después de abrirlo.
+            _temporizadorFiltros.Stop();
+
+            var periodos = ObtenerSeleccionados(_opPeriodos);
+            var sucursales = ObtenerSeleccionados(_opSucursales);
+            if (periodos.Count == 0) periodos = _motor.Datos.Periodos.Valores.ToList();
+            if (sucursales.Count == 0) sucursales = _motor.Datos.Sucursales.Valores.ToList();
+
+            _productosExplorados = _motor.Explorar(periodos, sucursales);
+            if (_productosExplorados.Count == 0)
             {
-                MessageBox.Show("Primero cargue datos.", "Sin Datos");
+                MessageBox.Show("No hay datos para los filtros seleccionados.");
                 return;
             }
 
             _modoExploracion = true;
+            GridResultados.ItemsSource = _productosExplorados.Select(p => p.Fila).ToList();
 
-            // 1. Obtener filtros actuales
-            var fechasSeleccionadas = ObtenerSeleccionados(LstFiltroFecha);
-            var sucursalesSeleccionadas = ObtenerSeleccionados(LstFiltroSucursal);
-
-            if (!fechasSeleccionadas.Any()) fechasSeleccionadas = _datosGlobales.Select(x => x.Periodo).Distinct().ToList();
-            if (!sucursalesSeleccionadas.Any()) sucursalesSeleccionadas = _datosGlobales.Select(x => x.Sucursal).Distinct().ToList();
-
-            // 2. Filtrar
-            var datosFiltrados = _datosGlobales.Where(x =>
-                fechasSeleccionadas.Contains(x.Periodo) &&
-                sucursalesSeleccionadas.Contains(x.Sucursal)
-            ).ToList();
-
-            if (!datosFiltrados.Any()) { MessageBox.Show("No hay datos para los filtros seleccionados."); return; }
-
-            // 3. Tabla Consolidada (Muestra disponibilidad de tiendas)
-            var consolidado = datosFiltrados
-                .GroupBy(x => x.ArticuloNombre.Trim())
-                .Select(g => new ResumenDinamico
-                {
-                    Etiqueta = g.Key,
-                    // Detalle: Lista de sucursales
-                    DetalleSecundario = string.Join(", ", g.Select(x => x.Sucursal).Distinct().OrderBy(s => s)),
-                    ValorNumerico = (double)g.Sum(x => x.TotalVenta),
-                    MargenPromedio = g.Any() ? (double)g.Average(x => x.PorcentajeUtilidad) : 0,
-                    TipoFormato = "Suma",
-                    // Disponibilidad: Cantidad de tiendas
-                    Participacion = $"{g.Select(x => x.Sucursal).Distinct().Count()} Tiendas"
-                })
-                .OrderBy(x => x.Etiqueta)
-                .ToList();
-
-            GridResultados.ItemsSource = consolidado;
-
-            // Títulos
             TxtTituloReporte.Text = "📦 Explorador de Productos";
-            TxtSubtitulo.Text = $"Viendo {consolidado.Count} productos únicos. Seleccione uno para comparar sucursales.";
-
-            if (ColumnaValor != null) ColumnaValor.Header = "Venta Total";
-            if (ColumnaParticipacion != null) ColumnaParticipacion.Header = "Disponibilidad";
-
-            // Limpiar gráfico
-            if (GraficoVentas != null) GraficoVentas.Series = new ISeries[] { };
-
-            MessageBox.Show("Explorador Listo.\nSeleccione un producto en la tabla para ver la COMPARATIVA DE SUCURSALES mes a mes.", "Modo Comparativo");
+            TxtSubtitulo.Text = $"{_productosExplorados.Count.ToString("N0", _culturaCR)} productos únicos. " +
+                                "Seleccione uno para comparar sucursales mes a mes.";
+            ColumnaValor.Header = "Venta Total";
+            ColumnaParticipacion.Header = "Disponibilidad";
+            GraficoVentas.Series = Array.Empty<ISeries>();
         }
 
-        // Evento: Al seleccionar un producto, mostrar GRÁFICO MULTI-SUCURSAL
         private void GridResultados_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (!_modoExploracion || GridResultados.SelectedItem == null) return;
+            if (!_modoExploracion) return;
 
-            var itemSeleccionado = GridResultados.SelectedItem as ResumenDinamico;
-            if (itemSeleccionado == null) return;
+            int indice = GridResultados.SelectedIndex;
+            if (indice < 0 || indice >= _productosExplorados.Count) return;
 
-            var nombreProducto = itemSeleccionado.Etiqueta;
+            var producto = _productosExplorados[indice];
+            var periodos = ObtenerSeleccionados(_opPeriodos);
+            if (periodos.Count == 0) periodos = _motor!.Datos.Periodos.Valores.ToList();
+            periodos = periodos.OrderBy(p => p, StringComparer.CurrentCulture).ToList();
 
-            // Filtros actuales
-            var fechasSeleccionadas = ObtenerSeleccionados(LstFiltroFecha);
-            if (!fechasSeleccionadas.Any()) fechasSeleccionadas = _datosGlobales.Select(x => x.Periodo).Distinct().ToList();
-
-            // Ordenar fechas cronológicamente para el Eje X
-            var fechasOrdenadas = fechasSeleccionadas.OrderBy(x => x).ToList();
-
-            // Filtrar datos crudos del producto seleccionado
-            var datosProducto = _datosGlobales
-                .Where(x => x.ArticuloNombre.Trim() == nombreProducto && fechasSeleccionadas.Contains(x.Periodo))
-                .ToList();
-
-            ActualizarGraficoComparativo(datosProducto, fechasOrdenadas, nombreProducto);
+            var (sucursales, valores) = _motor!.MargenPorSucursal(producto.NormalizadoId, periodos);
+            DibujarGraficoComparativo(sucursales, valores, periodos, producto.Fila.Etiqueta);
         }
 
-        // ==========================================
-        // NUEVO GRÁFICO: Comparativa Sucursales Mes a Mes
-        // ==========================================
-        private void ActualizarGraficoComparativo(List<VentaItem> datos, List<string> mesesEjeX, string nombreProducto)
+        private void DibujarGraficoComparativo(List<string> sucursales, List<double?[]> valores,
+                                               List<string> meses, string nombreProducto)
         {
-            if (GraficoVentas == null) return;
-
-            // Esto permite ver los tooltips de todas las sucursales al mismo tiempo al pasar el mouse por el mes
             GraficoVentas.TooltipFindingStrategy = TooltipFindingStrategy.CompareOnlyX;
 
-            var listaSeries = new List<ISeries>();
-
-            // 1. Agrupar datos por Sucursal
-            var datosPorSucursal = datos.GroupBy(x => x.Sucursal).OrderBy(g => g.Key).ToList();
-
-            foreach (var grupoSucursal in datosPorSucursal)
+            var series = new List<ISeries>(sucursales.Count);
+            for (int i = 0; i < sucursales.Count; i++)
             {
-                var nombreSucursal = grupoSucursal.Key;
-                var valores = new List<double?>(); // Usamos nullable para huecos
-
-                // 2. Alinear datos con el Eje X (Meses)
-                foreach (var mes in mesesEjeX)
+                var color = ColorSerie(i);
+                series.Add(new LineSeries<double?>
                 {
-                    // Buscamos si hubo venta en ese mes para esta sucursal
-                    var ventaMes = grupoSucursal.Where(x => x.Periodo == mes).ToList();
-
-                    if (ventaMes.Any())
-                    {
-                        // Promedio de utilidad de ese mes
-                        double utilidad = (double)ventaMes.Average(x => x.PorcentajeUtilidad);
-                        valores.Add(utilidad * 100); // Convertir a escala 0-100
-                    }
-                    else
-                    {
-                        // Si no hubo venta, agregamos null para que la línea se corte o no dibuje punto
-                        valores.Add(null);
-                    }
-                }
-
-                // 3. Crear Serie para la Sucursal
-                listaSeries.Add(new LineSeries<double?>
-                {
-                    Name = nombreSucursal,
-                    Values = valores,
-                    LineSmoothness = 0, // Líneas rectas para mayor precisión
-                    GeometrySize = 8,
-                    Stroke = new SolidColorPaint { StrokeThickness = 3 }, // Grosor de línea
-                    Fill = null, // Sin relleno debajo de la línea para no ensuciar
-                    TooltipLabelFormatter = p => $"{p.Context.Series.Name}: {p.Model:N2}%"
+                    Name = sucursales[i],
+                    Values = valores[i],
+                    LineSmoothness = 0,
+                    GeometrySize = 9,
+                    Stroke = new SolidColorPaint(color) { StrokeThickness = 3 },
+                    GeometryFill = new SolidColorPaint(color),
+                    GeometryStroke = new SolidColorPaint(SKColors.White) { StrokeThickness = 2 },
+                    Fill = null,
+                    YToolTipLabelFormatter = p => $"{p.Context.Series.Name}: {p.Coordinate.PrimaryValue:N2}%"
                 });
             }
 
-            GraficoVentas.Series = listaSeries.ToArray();
-            GraficoVentas.XAxes = new Axis[] {
-                new Axis {
-                    Labels = mesesEjeX,
-                    LabelsRotation = 0,
-                    TextSize = 12,
-                    Name = "Comparativa Mensual"
-                }
-            };
-            GraficoVentas.YAxes = new Axis[] {
-                new Axis {
-                    Labeler = v => $"{v:N0}%",
-                    Name = $"Margen Utilidad: {nombreProducto}"
-                }
-            };
+            GraficoVentas.Series = series;
+            GraficoVentas.XAxes = new[] { new Axis { Labels = meses, LabelsRotation = 0, TextSize = 12, Name = "Comparativa Mensual" } };
+            // El nombre del producto va en el subtítulo: puesto en el eje se recortaba.
+            GraficoVentas.YAxes = new[] { new Axis { Labeler = v => $"{v:N0}%", Name = "Margen de Utilidad" } };
+
+            TxtSubtitulo.Text = sucursales.Count > 0
+                ? $"{nombreProducto} — margen mes a mes en {sucursales.Count} sucursal(es)."
+                : $"{nombreProducto} — sin ventas en los periodos seleccionados.";
         }
 
         // ==========================================
-        // MÉTODOS ESTÁNDAR (Lógica base intacta)
+        // FILTROS
         // ==========================================
-
-        private void AplicarFiltros()
+        private void InicializarFiltros(ConjuntoDatos datos)
         {
-            _modoExploracion = false;
-            if (GridResultados == null || CmbAgrupacion == null) return;
-            if (ColumnaParticipacion != null) ColumnaParticipacion.Header = "% Part.";
-
-            var itemEjeX = CmbAgrupacion.SelectedItem as ComboBoxItem;
-            var itemOp = CmbOperacion.SelectedItem as ComboBoxItem;
-            if (itemEjeX == null || itemOp == null) return;
-
-            string ejeX = itemEjeX.Content.ToString();
-            string operacion = itemOp.Content.ToString();
-            var dimensionesSerie = ObtenerSeleccionados(LstDesglose);
-            bool hayDesglose = dimensionesSerie.Any();
-
-            var sSucs = ObtenerSeleccionados(LstFiltroSucursal);
-            var sFechas = ObtenerSeleccionados(LstFiltroFecha);
-            var sProvs = ObtenerSeleccionados(LstFiltroProveedor);
-            var sFams = ObtenerSeleccionados(LstFiltroFamilia);
-
-            if (!sSucs.Any()) { GridResultados.ItemsSource = null; return; }
-
-            var datos = _datosGlobales.Where(x =>
-                sSucs.Contains(x.Sucursal) && sFechas.Contains(x.Periodo) &&
-                sProvs.Contains(x.Proveedor) && sFams.Contains(x.Familia)).ToList();
-
-            double sumaGlobal = datos.Sum(x => (double)x.TotalVenta);
-            Func<IEnumerable<VentaItem>, double> calcMargen = (g) => g.Any() ? (double)g.Average(x => x.PorcentajeUtilidad) : 0;
-
-            List<ResumenDinamico> resumenTabla;
-
-            if (hayDesglose)
+            _cargandoFiltros = true;
+            try
             {
-                resumenTabla = datos.GroupBy(x => new { KeyX = ObtenerLlaveSimple(x, ejeX), KeySerie = ObtenerLlaveCompuesta(x, dimensionesSerie) })
-                    .Select(g => new ResumenDinamico
-                    {
-                        Etiqueta = g.Key.KeyX,
-                        DetalleSecundario = g.Key.KeySerie,
-                        ValorNumerico = CalcularValor(g, operacion),
-                        MargenPromedio = calcMargen(g),
-                        TipoFormato = operacion,
-                        Participacion = (operacion.Contains("Suma") && sumaGlobal > 0) ? (CalcularValor(g, operacion) / sumaGlobal).ToString("P1", _culturaCR) : "-"
-                    }).OrderByDescending(x => x.ValorNumerico).ToList();
-            }
-            else
-            {
-                resumenTabla = datos.GroupBy(x => ObtenerLlaveSimple(x, ejeX))
-                    .Select(g => new ResumenDinamico
-                    {
-                        Etiqueta = g.Key,
-                        DetalleSecundario = "Total General",
-                        ValorNumerico = CalcularValor(g, operacion),
-                        MargenPromedio = calcMargen(g),
-                        TipoFormato = operacion,
-                        Participacion = (operacion.Contains("Suma") && sumaGlobal > 0) ? (CalcularValor(g, operacion) / sumaGlobal).ToString("P1", _culturaCR) : "-"
-                    }).OrderByDescending(x => x.ValorNumerico).ToList();
-            }
-            if (ejeX == "Año Mes") resumenTabla = resumenTabla.OrderBy(x => x.Etiqueta).ThenByDescending(x => x.ValorNumerico).ToList();
+                Rellenar(_opSucursales, LstFiltroSucursal,
+                    datos.Sucursales.Valores.OrderBy(x => x, StringComparer.CurrentCulture), true,
+                    marcaFamilias: true);
 
-            GridResultados.ItemsSource = resumenTabla;
-            if (ColumnaValor != null) ColumnaValor.Header = operacion;
-            TxtTituloReporte.Text = hayDesglose ? $"Análisis: {ejeX} vs Series" : $"Total por {ejeX}";
-            TxtSubtitulo.Text = $"{datos.Count} registros filtrados.";
-            ActualizarGraficoMultiNivel(datos, ejeX, dimensionesSerie, operacion);
+                Rellenar(_opPeriodos, LstFiltroFecha,
+                    datos.Periodos.Valores.OrderByDescending(x => x, StringComparer.CurrentCulture), true);
+
+                Rellenar(_opProveedores, LstFiltroProveedor,
+                    datos.Proveedores.Valores.OrderBy(x => x, StringComparer.CurrentCulture), true,
+                    marcaFamilias: true);
+                AplicarBusqueda(LstFiltroProveedor, TxtBuscarProveedor.Text);
+
+                ActualizarChecklistFamilias();
+            }
+            finally { _cargandoFiltros = false; }
         }
 
-        // ==========================================
-        // INFRAESTRUCTURA (Helpers y Excel)
-        // ==========================================
-        private double CalcularValor(IEnumerable<VentaItem> datos, string operacion) { if (operacion.Contains("Suma")) return (double)datos.Sum(x => x.TotalVenta); if (operacion.Contains("Promedio")) return (double)(datos.Any() ? datos.Average(x => x.PorcentajeUtilidad) : 0); return datos.Count(); }
-        private string ObtenerLlaveSimple(VentaItem item, string criterio) { switch (criterio) { case "Año Mes": return item.Periodo; case "Proveedor": return item.Proveedor; case "Familia": return item.Familia; case "Sucursal": return item.Sucursal; case "Articulo": return item.ArticuloNombre; default: return "General"; } }
-        private string ObtenerLlaveCompuesta(VentaItem item, List<string> dimensiones) { if (!dimensiones.Any()) return ""; var partes = new List<string>(); foreach (var dim in dimensiones) partes.Add(ObtenerLlaveSimple(item, dim)); return string.Join(" - ", partes); }
-
-        private void ActualizarGraficoMultiNivel(List<VentaItem> datos, string ejeX, List<string> dimensionesSerie, string operacion)
+        /// <summary>
+        /// Reconstruye un checklist. Se desuscribe de los elementos anteriores para no
+        /// dejar manejadores colgando cada vez que se recarga una carpeta.
+        /// </summary>
+        private void Rellenar(List<OpcionFiltro> destino, ListBox lista, IEnumerable<string> valores,
+                              bool marcados, bool marcaFamilias = false)
         {
-            if (GraficoVentas == null) return;
-            GraficoVentas.Series = new ISeries[] { };
-            GraficoVentas.TooltipFindingStrategy = TooltipFindingStrategy.CompareOnlyX;
-            var etiquetasX = datos.Select(x => ObtenerLlaveSimple(x, ejeX)).Distinct().ToList();
-            bool esTiempo = (ejeX == "Año Mes");
-            if (esTiempo) etiquetasX = etiquetasX.OrderBy(x => x).ToList();
-            else etiquetasX = etiquetasX.OrderByDescending(lbl => CalcularValor(datos.Where(d => ObtenerLlaveSimple(d, ejeX) == lbl), operacion)).Take(20).ToList();
-            var listaSeries = new List<ISeries>();
-            Func<ChartPoint, string> tp = point => { double val = point.PrimaryValue; if (Math.Abs(val) < 0.01) return null; return $"{point.Context.Series.Name}: {val.ToString("N0", _culturaCR)}"; };
-            if (dimensionesSerie.Any())
+            foreach (var vieja in destino)
             {
-                var top = datos.GroupBy(x => ObtenerLlaveCompuesta(x, dimensionesSerie)).OrderByDescending(g => CalcularValor(g, operacion)).Take(10).Select(g => g.Key).ToList();
-                foreach (var s in top)
-                {
-                    var v = new List<double>(); foreach (var x in etiquetasX) v.Add(CalcularValor(datos.Where(d => ObtenerLlaveSimple(d, ejeX) == x && ObtenerLlaveCompuesta(d, dimensionesSerie) == s), operacion));
-                    if (esTiempo) listaSeries.Add(new LineSeries<double> { Name = s, Values = v, LineSmoothness = 0, GeometrySize = 10, Stroke = new SolidColorPaint { StrokeThickness = 3 }, Fill = null, TooltipLabelFormatter = tp });
-                    else listaSeries.Add(new ColumnSeries<double> { Name = s, Values = v, TooltipLabelFormatter = tp });
-                }
+                vieja.PropertyChanged -= OpcionCambiada;
+                vieja.PropertyChanged -= OpcionCambiadaConFamilias;
             }
-            else
+            destino.Clear();
+
+            foreach (var v in valores)
             {
-                var v = new List<double>(); foreach (var x in etiquetasX) v.Add(CalcularValor(datos.Where(d => ObtenerLlaveSimple(d, ejeX) == x), operacion));
-                listaSeries.Add(new ColumnSeries<double> { Name = "Total", Values = v, Fill = new SolidColorPaint(SKColors.DarkCyan), TooltipLabelFormatter = tp });
+                var op = new OpcionFiltro(v, marcados);
+                op.PropertyChanged += marcaFamilias ? OpcionCambiadaConFamilias : OpcionCambiada;
+                destino.Add(op);
             }
-            GraficoVentas.Series = listaSeries.ToArray();
-            GraficoVentas.XAxes = new Axis[] { new Axis { Labels = etiquetasX, LabelsRotation = 25, TextSize = 11 } };
-            GraficoVentas.YAxes = new Axis[] { new Axis { Labeler = val => val.ToString("N0", _culturaCR) } };
+
+            lista.ItemsSource = null;
+            lista.ItemsSource = destino;
         }
 
-        private void LimpiarVersionesAntiguas() { try { string p = Process.GetCurrentProcess().MainModule.FileName + ".old"; if (File.Exists(p)) File.Delete(p); } catch { } }
-        private void CargarOpcionesDesglose() { LstDesglose.ItemsSource = new List<string> { "Proveedor", "Familia", "Sucursal", "Año Mes" }; }
-        private void ConfigurarCulturaManual() { _culturaCR = (CultureInfo)CultureInfo.CreateSpecificCulture("es-CR").Clone(); _culturaCR.NumberFormat.CurrencySymbol = "₡"; CultureInfo.DefaultThreadCurrentCulture = _culturaCR; CultureInfo.DefaultThreadCurrentUICulture = _culturaCR; }
-        private async void BtnActualizar_Click(object sender, RoutedEventArgs e) { MessageBox.Show("Sistema Actualizado."); }
+        private void OpcionCambiada(object? s, System.ComponentModel.PropertyChangedEventArgs e)
+            => ProgramarRecalculo();
 
-        private void BtnCargarCarpeta_Click(object sender, RoutedEventArgs e)
+        private void OpcionCambiadaConFamilias(object? s, System.ComponentModel.PropertyChangedEventArgs e)
         {
-            var dialog = new OpenFileDialog { Title = "Seleccione archivo Excel", Filter = "Excel|*.xlsx;*.xls", CheckFileExists = true };
-            if (dialog.ShowDialog() == true)
-            {
-                try
-                {
-                    string carpeta = Path.GetDirectoryName(dialog.FileName);
-                    string[] archivos = Directory.GetFiles(carpeta, "*.xls*");
-                    if (archivos.Length == 0) return;
-                    TxtEstadoArchivo.Text = $"Procesando {archivos.Length} archivos...";
-                    var servicio = new ExcelService();
-                    string modo = (CmbTipoNegocio.SelectedItem as ComboBoxItem)?.Content.ToString();
-                    _datosGlobales.Clear();
-                    int contador = 0; string errores = "";
-                    foreach (string archivo in archivos) { try { string sucursal = Path.GetFileNameWithoutExtension(archivo); _datosGlobales.AddRange(servicio.CargarDatos(archivo, modo, sucursal)); contador++; } catch (Exception ex) { errores += $"\n{Path.GetFileName(archivo)}: {ex.Message}"; } }
-                    if (_datosGlobales.Any()) { TxtEstadoArchivo.Text = $"Carga OK: {contador} archivos."; TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Green; InicializarFiltros(); AplicarFiltros(); if (!string.IsNullOrEmpty(errores)) MessageBox.Show($"Errores:{errores}"); }
-                    else { TxtEstadoArchivo.Text = "No se encontraron datos."; TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Red; }
-                }
-                catch (Exception ex) { MessageBox.Show(ex.Message); }
-            }
+            _familiasDesactualizadas = true;
+            ProgramarRecalculo();
         }
 
-        private void InicializarFiltros() { _cargandoFiltros = true; LstFiltroSucursal.ItemsSource = _datosGlobales.Select(x => x.Sucursal).Distinct().OrderBy(x => x).ToList(); LstFiltroSucursal.SelectAll(); LstFiltroFecha.ItemsSource = _datosGlobales.Select(x => x.Periodo).Distinct().OrderByDescending(x => x).ToList(); LstFiltroFecha.SelectAll(); LstFiltroProveedor.ItemsSource = _datosGlobales.Select(x => x.Proveedor).Distinct().OrderBy(x => x).ToList(); LstFiltroProveedor.SelectAll(); ActualizarChecklistFamilias(); _cargandoFiltros = false; }
-        private void ActualizarChecklistFamilias() { if (LstFiltroProveedor == null) return; var p = ObtenerSeleccionados(LstFiltroProveedor); var s = ObtenerSeleccionados(LstFiltroSucursal); var q = _datosGlobales.Where(x => p.Contains(x.Proveedor) && s.Contains(x.Sucursal)); LstFiltroFamilia.ItemsSource = q.Select(x => x.Familia).Distinct().OrderBy(x => x).ToList(); LstFiltroFamilia.SelectAll(); }
-        private List<string> ObtenerSeleccionados(ListBox lb) { var l = new List<string>(); if (lb.SelectedItems == null) return l; foreach (var i in lb.SelectedItems) l.Add(i is ListBoxItem bi ? bi.Content.ToString() : i.ToString()); return l; }
-        private void BtnSelectAllSucursal_Click(object s, RoutedEventArgs e) => LstFiltroSucursal.SelectAll();
-        private void BtnSelectAllFecha_Click(object s, RoutedEventArgs e) => LstFiltroFecha.SelectAll();
-        private void BtnSelectAllProv_Click(object s, RoutedEventArgs e) => LstFiltroProveedor.SelectAll();
-        private void BtnSelectAllFam_Click(object s, RoutedEventArgs e) => LstFiltroFamilia.SelectAll();
-        private void AplicarFiltros_Event(object s, RoutedEventArgs e) { if (!_cargandoFiltros) AplicarFiltros(); }
-        private void AplicarFiltros_Event(object s, SelectionChangedEventArgs e) { if (!_cargandoFiltros) AplicarFiltros(); }
-        private void LstFiltroProveedor_SelectionChanged(object s, SelectionChangedEventArgs e) { if (!_cargandoFiltros) { ActualizarChecklistFamilias(); AplicarFiltros(); } }
-    }
-
-    public class VentaItem { public string Sucursal { get; set; } public string Periodo { get; set; } public string ArticuloCodigo { get; set; } public string ArticuloNombre { get; set; } public string Proveedor { get; set; } public string Familia { get; set; } public decimal TotalVenta { get; set; } public decimal PorcentajeUtilidad { get; set; } }
-
-    public class ResumenDinamico
-    {
-        public string Etiqueta { get; set; }
-        public string DetalleSecundario { get; set; }
-        public double ValorNumerico { get; set; }
-        public double MargenPromedio { get; set; }
-        public string TipoFormato { get; set; }
-        public string Participacion { get; set; }
-        public string ValorFormateado { get { var cr = CultureInfo.GetCultureInfo("es-CR"); var n = (NumberFormatInfo)cr.NumberFormat.Clone(); n.CurrencySymbol = "₡"; if (TipoFormato.Contains("Suma")) return ValorNumerico.ToString("C2", n); if (TipoFormato.Contains("Promedio")) return ValorNumerico.ToString("P2", n); return ValorNumerico.ToString("N0", n); } }
-        public string MargenFormateado { get { return MargenPromedio.ToString("P2", CultureInfo.GetCultureInfo("es-CR")); } }
-    }
-
-    public class ExcelService
-    {
-        public List<VentaItem> CargarDatos(string ruta, string modo, string nombreSucursal)
+        /// <summary>
+        /// Las familias visibles dependen de los proveedores y sucursales elegidos.
+        /// Se resuelve con máscaras sobre ids en una sola pasada.
+        /// </summary>
+        private void ActualizarChecklistFamilias()
         {
-            var lista = new List<VentaItem>();
-            using (var workbook = new XLWorkbook(ruta))
+            if (_motor == null) return;
+            var datos = _motor.Datos;
+
+            var proveedores = new bool[datos.Proveedores.Count];
+            foreach (var p in ObtenerSeleccionados(_opProveedores))
             {
-                var ws = workbook.Worksheet(1);
-                IXLRow encabezadoRow = null;
-                int colFecha = -1, colCodigo = -1, colDesc = -1, colProv = -1, colFam = -1, colTotal = -1, colUtil = -1;
-                foreach (var row in ws.RowsUsed().Take(20))
-                {
-                    colFecha = -1; colCodigo = -1; colDesc = -1; colProv = -1; colFam = -1; colTotal = -1; colUtil = -1;
-                    foreach (var cell in row.CellsUsed())
-                    {
-                        string val = cell.GetString().ToLower().Trim();
-                        if (val.Contains("año") || val == "mes") colFecha = cell.Address.ColumnNumber;
-                        else if (val == "artículo" || val == "articulo") colCodigo = cell.Address.ColumnNumber;
-                        else if (val.Contains("desc") || val.Contains("nombre") || val.Contains("descripcion")) colDesc = cell.Address.ColumnNumber;
-                        else if (val.Contains("proveedor")) colProv = cell.Address.ColumnNumber;
-                        else if (val.Contains("familia")) colFam = cell.Address.ColumnNumber;
-                        else if (val == "total" || val == "total venta") colTotal = cell.Address.ColumnNumber;
-                        else if (val.Contains("utilidad") || val.Contains("%")) colUtil = cell.Address.ColumnNumber;
-                    }
-                    if (colTotal != -1 && colFam != -1) { encabezadoRow = row; break; }
-                }
-                if (encabezadoRow == null) return lista;
-                bool esMinimarket = (colCodigo != -1); if (modo != null && modo.Contains("Minimarket")) esMinimarket = true; else if (modo != null && modo.Contains("Souvenir")) esMinimarket = false;
-                string ultPeriodo = "", ultProv = "General", ultFam = "General";
-                foreach (var row in ws.RowsUsed().Where(r => r.RowNumber() > encabezadoRow.RowNumber()))
-                {
-                    try
-                    {
-                        if (colFecha != -1 && !row.Cell(colFecha).IsEmpty()) { var c = row.Cell(colFecha); ultPeriodo = c.DataType == XLDataType.DateTime ? c.GetDateTime().ToString("yyyy-MM") : c.GetString(); }
-                        if (colProv != -1 && !row.Cell(colProv).IsEmpty()) { string p = row.Cell(colProv).GetString(); if (!p.ToLower().Contains("total")) ultProv = p; }
-                        if (colFam != -1 && !row.Cell(colFam).IsEmpty()) ultFam = row.Cell(colFam).GetString();
-                        if (esMinimarket && colCodigo != -1 && row.Cell(colCodigo).IsEmpty()) continue;
-                        if (!esMinimarket && colFam != -1 && row.Cell(colFam).IsEmpty()) continue;
-                        if (colTotal == -1) continue; decimal total = 0; var cTotal = row.Cell(colTotal); if (cTotal.DataType == XLDataType.Number) total = (decimal)cTotal.GetDouble(); else ParseDecimalFlexible(cTotal.GetString(), out total); if (total == 0) continue;
-                        decimal utilidad = 0; if (colUtil != -1) { var cUtil = row.Cell(colUtil); if (!cUtil.IsEmpty()) { if (cUtil.DataType == XLDataType.Number) utilidad = (decimal)cUtil.GetDouble(); else ParseDecimalFlexible(cUtil.GetString(), out utilidad); } }
-                        string nombreReal = "Sin Nombre"; if (esMinimarket && colDesc != -1 && !row.Cell(colDesc).IsEmpty()) nombreReal = row.Cell(colDesc).GetString(); else if (!esMinimarket) nombreReal = ultFam;
-                        if (!string.IsNullOrEmpty(ultPeriodo) && !ultPeriodo.ToLower().Contains("año")) { lista.Add(new VentaItem { Sucursal = nombreSucursal, Periodo = ultPeriodo, ArticuloCodigo = (colCodigo != -1) ? row.Cell(colCodigo).GetString() : "", ArticuloNombre = nombreReal, Proveedor = ultProv, Familia = ultFam, TotalVenta = total, PorcentajeUtilidad = utilidad }); }
-                    }
-                    catch { continue; }
-                }
+                int id = datos.Proveedores.IdExistente(p);
+                if (id >= 0) proveedores[id] = true;
             }
+
+            var sucursales = new bool[datos.Sucursales.Count];
+            foreach (var s in ObtenerSeleccionados(_opSucursales))
+            {
+                int id = datos.Sucursales.IdExistente(s);
+                if (id >= 0) sucursales[id] = true;
+            }
+
+            var vistas = new bool[datos.Familias.Count];
+            foreach (ref readonly var f in datos.Filas.AsSpan())
+                if (proveedores[f.ProveedorId] && sucursales[f.SucursalId]) vistas[f.FamiliaId] = true;
+
+            var lista = new List<string>();
+            for (int i = 0; i < vistas.Length; i++) if (vistas[i]) lista.Add(datos.Familias[i]);
+            lista.Sort(StringComparer.CurrentCulture);
+
+            bool previo = _cargandoFiltros;
+            _cargandoFiltros = true;
+            try
+            {
+                Rellenar(_opFamilias, LstFiltroFamilia, lista, true);
+                AplicarBusqueda(LstFiltroFamilia, TxtBuscarFamilia.Text);
+            }
+            finally { _cargandoFiltros = previo; }
+        }
+
+        private static List<string> ObtenerSeleccionados(List<OpcionFiltro> opciones)
+        {
+            var lista = new List<string>(opciones.Count);
+            foreach (var o in opciones) if (o.Seleccionado) lista.Add(o.Nombre);
             return lista;
         }
-        private void ParseDecimalFlexible(string t, out decimal r) { r = 0; if (string.IsNullOrWhiteSpace(t)) return; string l = t.Replace("%", "").Replace("$", "").Replace("₡", "").Trim(); if (decimal.TryParse(l, NumberStyles.Any, CultureInfo.InvariantCulture, out r)) return; var cr = CultureInfo.GetCultureInfo("es-CR"); if (decimal.TryParse(l, NumberStyles.Any, cr, out r)) return; }
+
+        private void ProgramarRecalculo()
+        {
+            if (_cargandoFiltros || _motor == null) return;
+            _temporizadorFiltros.Stop();
+            _temporizadorFiltros.Start();
+        }
+
+        // ==========================================
+        // BUSCADORES
+        // ==========================================
+
+        /// <summary>
+        /// Oculta de la vista lo que no coincide, sin tocar el estado marcado: la selección
+        /// está en OpcionFiltro y el filtro sólo afecta a la CollectionView.
+        /// </summary>
+        private static void AplicarBusqueda(ListBox lista, string? texto)
+        {
+            var vista = CollectionViewSource.GetDefaultView(lista.ItemsSource);
+            if (vista == null) return;
+
+            texto = texto?.Trim();
+            if (string.IsNullOrEmpty(texto)) vista.Filter = null;
+            else vista.Filter = o => o is OpcionFiltro op &&
+                                     op.Nombre.Contains(texto, StringComparison.CurrentCultureIgnoreCase);
+        }
+
+        private void TxtBuscarProveedor_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            PistaProveedor.Visibility = TxtBuscarProveedor.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            AplicarBusqueda(LstFiltroProveedor, TxtBuscarProveedor.Text);
+        }
+
+        private void TxtBuscarFamilia_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            PistaFamilia.Visibility = TxtBuscarFamilia.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            AplicarBusqueda(LstFiltroFamilia, TxtBuscarFamilia.Text);
+        }
+
+        /// <summary>
+        /// Marca o desmarca sólo lo que está visible en la lista. Con una búsqueda activa
+        /// eso significa "sólo los resultados de la búsqueda", que es lo que hace útil la
+        /// combinación buscar + Todas / Ninguna.
+        /// </summary>
+        private void MarcarVisibles(ListBox lista, bool marcado)
+        {
+            var vista = CollectionViewSource.GetDefaultView(lista.ItemsSource);
+            if (vista == null) return;
+
+            bool alguno = false;
+            foreach (var o in vista)
+            {
+                if (o is not OpcionFiltro op || op.Seleccionado == marcado) continue;
+                op.EstablecerSilencioso(marcado);
+                op.NotificarSeleccion();   // refresca la casilla, sin recalcular por cada una
+                alguno = true;
+            }
+
+            if (!alguno) return;
+            if (lista == LstFiltroProveedor || lista == LstFiltroSucursal) _familiasDesactualizadas = true;
+            ProgramarRecalculo();
+        }
+
+        private void BtnSelectAllSucursal_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroSucursal, true);
+        private void BtnSelectAllFecha_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroFecha, true);
+        private void BtnSelectAllProv_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroProveedor, true);
+        private void BtnSelectAllFam_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroFamilia, true);
+        private void BtnNingunoProv_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroProveedor, false);
+        private void BtnNingunaFam_Click(object s, RoutedEventArgs e) => MarcarVisibles(LstFiltroFamilia, false);
+
+        private void AplicarFiltros_Event(object s, SelectionChangedEventArgs e) => ProgramarRecalculo();
+
+        private void BtnAyuda_Click(object sender, RoutedEventArgs e)
+            => new VentanaGuia { Owner = this }.ShowDialog();
+
+        // ==========================================
+        // VARIOS
+        // ==========================================
+        private void CargarOpcionesDesglose()
+        {
+            Rellenar(_opDesglose, LstDesglose, new[] { "Proveedor", "Familia", "Sucursal", "Año Mes" }, marcados: false);
+        }
+
+        private void ConfigurarCulturaManual()
+        {
+            _culturaCR = (CultureInfo)CultureInfo.CreateSpecificCulture("es-CR").Clone();
+            _culturaCR.NumberFormat.CurrencySymbol = "₡";
+            CultureInfo.DefaultThreadCurrentCulture = _culturaCR;
+            CultureInfo.DefaultThreadCurrentUICulture = _culturaCR;
+            Thread.CurrentThread.CurrentCulture = _culturaCR;
+            Thread.CurrentThread.CurrentUICulture = _culturaCR;
+        }
+
+        private void BtnActualizar_Click(object sender, RoutedEventArgs e)
+            => new VentanaActualizacion { Owner = this }.ShowDialog();
+
+        /// <summary>
+        /// Borra el ejecutable anterior que dejó una actualización, y también el temporal
+        /// de una descarga que se hubiera interrumpido.
+        /// </summary>
+        private static void LimpiarVersionesAntiguas()
+        {
+            ActualizacionService.LimpiarRespaldos();
+            try
+            {
+                string? exe = Environment.ProcessPath;
+                if (exe != null && File.Exists(exe + ".nuevo")) File.Delete(exe + ".nuevo");
+            }
+            catch { /* sin permisos o archivo en uso: no es crítico */ }
+        }
     }
 }
