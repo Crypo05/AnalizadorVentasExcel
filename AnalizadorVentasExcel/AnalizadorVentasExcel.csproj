@@ -17,7 +17,7 @@
 		     que muestra la app y compara el actualizador (MainWindow.VersionActual la lee
 		     del ensamblado). Al publicar una versión nueva se cambia solo este número,
 		     y la etiqueta del release en GitHub tiene que coincidir. -->
-		<Version>1.8.0</Version>
+		<Version>1.8.1</Version>
 		<AssemblyTitle>Analizador Corporativo</AssemblyTitle>
 
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
