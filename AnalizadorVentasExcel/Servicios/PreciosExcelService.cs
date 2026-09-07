@@ -102,8 +102,18 @@ namespace AnalizadorVentasExcel.Servicios
         }
 
         /// <summary>
-        /// Los archivos suelen llamarse "precios la bomba 07-09-26": la fecha y la palabra
-        /// "precios" son ruido en la cabecera de la columna, así que se recortan.
+        /// Palabras con las que la caja bautiza los reportes: "precios la bomba 07-09-26",
+        /// "costos y precios catarata 07-09-26". Delante del nombre real de la sucursal son
+        /// ruido, y con varias columnas abiertas a la vez hacen ilegible el encabezado.
+        /// </summary>
+        private static readonly string[] PalabrasDeReporte =
+            { "precio", "precios", "costo", "costos", "lista", "listas", "utilidad", "y", "de", "del" };
+
+        /// <summary>
+        /// Nombre de la sucursal a partir del archivo: se le quitan la fecha y las palabras
+        /// del tipo de reporte, hasta llegar a la primera que no lo sea. El recorte se frena
+        /// siempre antes de dejarlo vacío, así que un archivo llamado sólo "precios.xlsx"
+        /// conserva ese nombre en vez de quedarse sin ninguno.
         /// </summary>
         internal static string NombreSucursal(string ruta)
         {
@@ -112,7 +122,8 @@ namespace AnalizadorVentasExcel.Servicios
             var partes = nombre.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                                .Where(p => !EsFecha(p))
                                .ToList();
-            if (partes.Count > 1 && Normalizar(partes[0]).StartsWith("precio", StringComparison.Ordinal))
+
+            while (partes.Count > 1 && Array.IndexOf(PalabrasDeReporte, Normalizar(partes[0])) >= 0)
                 partes.RemoveAt(0);
 
             return partes.Count == 0 ? nombre : string.Join(" ", partes);

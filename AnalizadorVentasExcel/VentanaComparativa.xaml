@@ -83,6 +83,7 @@
                                 <ComboBoxItem Content="Precio de venta (IVI)"/>
                                 <ComboBoxItem Content="Precio de costo"/>
                                 <ComboBoxItem Content="% de utilidad"/>
+                                <ComboBoxItem Content="Costo y precio de venta"/>
                             </ComboBox>
 
                             <TextBlock Text="Productos:" FontWeight="SemiBold"/>
@@ -192,8 +193,8 @@
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Código" Binding="{Binding Codigo}" Width="1.1*" MinWidth="105" FontFamily="Consolas" FontSize="11"/>
-                    <DataGridTextColumn Header="Descripción" Binding="{Binding Descripcion}" Width="3*" MinWidth="160">
+                    <DataGridTextColumn x:Name="ColumnaCodigo" Header="Código" Binding="{Binding Codigo}" Width="1.1*" MinWidth="105" FontFamily="Consolas" FontSize="11"/>
+                    <DataGridTextColumn x:Name="ColumnaDescripcion" Header="Descripción" Binding="{Binding Descripcion}" Width="3*" MinWidth="160">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
                                 <Setter Property="ToolTip" Value="{Binding DetalleDescripciones}"/>
@@ -201,21 +202,31 @@
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
 
-                    <!-- Aquí se insertan en código una columna por sucursal comparada. -->
+                    <!-- Aquí se insertan en código las columnas por sucursal: una, o dos
+                         (costo y venta) en la vista combinada. -->
 
                     <DataGridTextColumn x:Name="ColumnaDiferencia" Header="Dif." Binding="{Binding DiferenciaTexto}"
                                         SortMemberPath="Diferencia" Width="1*"
                                         ElementStyle="{StaticResource CeldaNumerica}" FontWeight="SemiBold"/>
-                    <DataGridTextColumn Header="Dif. %" Binding="{Binding DiferenciaPctTexto}"
+                    <DataGridTextColumn x:Name="ColumnaDiferenciaPct" Header="Dif. %" Binding="{Binding DiferenciaPctTexto}"
                                         SortMemberPath="DiferenciaPct" Width="0.8*"
                                         ElementStyle="{StaticResource CeldaNumerica}" FontWeight="Bold" Foreground="#C0392B"/>
+
+                    <!-- Sólo visibles en la vista combinada. -->
+                    <DataGridTextColumn x:Name="ColumnaDiferenciaVenta" Header="Dif. venta" Binding="{Binding DiferenciaVentaTexto}"
+                                        SortMemberPath="DiferenciaVenta" Width="1*" Visibility="Collapsed"
+                                        ElementStyle="{StaticResource CeldaNumerica}" FontWeight="SemiBold"/>
+                    <DataGridTextColumn x:Name="ColumnaDiferenciaVentaPct" Header="Dif. venta %" Binding="{Binding DiferenciaVentaPctTexto}"
+                                        SortMemberPath="DiferenciaVentaPct" Width="0.8*" Visibility="Collapsed"
+                                        ElementStyle="{StaticResource CeldaNumerica}" FontWeight="Bold" Foreground="#C0392B"/>
+
                     <DataGridTextColumn x:Name="ColumnaMejor" Header="Más barata" Binding="{Binding Mejor}" Width="1.1*"
                                         FontSize="11" Foreground="#1E8E3E"/>
                     <DataGridTextColumn x:Name="ColumnaPeor" Header="Más cara" Binding="{Binding Peor}" Width="1.1*"
                                         FontSize="11" Foreground="#C0392B"/>
-                    <DataGridTextColumn Header="Suc." Binding="{Binding PresenciaTexto}" SortMemberPath="Presencia"
+                    <DataGridTextColumn x:Name="ColumnaPresencia" Header="Suc." Binding="{Binding PresenciaTexto}" SortMemberPath="Presencia"
                                         Width="0.5*" FontSize="11" Foreground="DimGray"/>
-                    <DataGridTextColumn Header="Aviso" Binding="{Binding Aviso}" Width="1.6*" MinWidth="120" FontSize="11" Foreground="#B9770E"/>
+                    <DataGridTextColumn x:Name="ColumnaAviso" Header="Aviso" Binding="{Binding Aviso}" Width="1.6*" MinWidth="120" FontSize="11" Foreground="#B9770E"/>
                 </DataGrid.Columns>
             </DataGrid>
 

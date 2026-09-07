@@ -3,12 +3,17 @@ using System.Windows.Media;
 
 namespace AnalizadorVentasExcel.Modelos
 {
-    /// <summary>Qué columna del reporte de precios se compara entre sucursales.</summary>
+    /// <summary>
+    /// Qué columna del reporte de precios se compara entre sucursales.
+    /// <see cref="CostoYVenta"/> es distinta a las demás: muestra dos valores por sucursal
+    /// en vez de uno, para ver de un vistazo a cuánto se compra y a cuánto se vende.
+    /// </summary>
     public enum MetricaPrecio
     {
         PrecioVenta = 0,
         Costo = 1,
-        Utilidad = 2
+        Utilidad = 2,
+        CostoYVenta = 3
     }
 
     /// <summary>
@@ -71,6 +76,7 @@ namespace AnalizadorVentasExcel.Modelos
         {
             MetricaPrecio.Costo => "Precio de costo",
             MetricaPrecio.Utilidad => "% de utilidad",
+            MetricaPrecio.CostoYVenta => "Costo y precio de venta",
             _ => "Precio de venta (IVI)"
         };
 
@@ -79,6 +85,16 @@ namespace AnalizadorVentasExcel.Modelos
         /// margen. De esto depende de qué color se pinta cada celda.
         /// </summary>
         public static bool MejorEsMayor(MetricaPrecio m) => m == MetricaPrecio.Utilidad;
+
+        /// <summary>
+        /// La vista que trae costo y venta juntos: dos columnas por sucursal en vez de una,
+        /// y dos juegos de columnas de diferencia.
+        /// </summary>
+        public static bool EsCombinada(MetricaPrecio m) => m == MetricaPrecio.CostoYVenta;
+
+        /// <summary>Las dos métricas que se muestran juntas, en el orden de las columnas.</summary>
+        public static readonly MetricaPrecio[] MetricasCombinadas =
+            { MetricaPrecio.Costo, MetricaPrecio.PrecioVenta };
     }
 
     /// <summary>
@@ -106,7 +122,14 @@ namespace AnalizadorVentasExcel.Modelos
         public string DetalleDescripciones { get; init; } = string.Empty;
         public bool DescripcionesDistintas { get; init; }
 
-        /// <summary>Valor en cada sucursal comparada, null si el producto no está en ella.</summary>
+        /// <summary>
+        /// Valor en cada sucursal comparada, null si el producto no está en ella.
+        ///
+        /// En la vista combinada hay DOS entradas por sucursal, intercaladas: el costo en
+        /// las posiciones pares y el precio de venta en las impares (sucursal s ocupa 2s y
+        /// 2s+1). Se guardan así, y no en dos arreglos, para que la tabla siga enlazando
+        /// por posición (<c>Textos[i]</c>, <c>Colores[i]</c>) sin distinguir el modo.
+        /// </summary>
         public decimal?[] Valores { get; init; } = Array.Empty<decimal?>();
         public string[] Textos { get; init; } = Array.Empty<string>();
         public Brush[] Colores { get; init; } = Array.Empty<Brush>();
@@ -121,6 +144,23 @@ namespace AnalizadorVentasExcel.Modelos
 
         public string DiferenciaTexto { get; init; } = "-";
         public string DiferenciaPctTexto { get; init; } = "-";
+
+        /// <summary>
+        /// Segunda diferencia, sólo en la vista combinada: las de arriba son del costo y
+        /// estas del precio de venta. Fuera de esa vista quedan en cero.
+        /// </summary>
+        public decimal DiferenciaVenta { get; init; }
+        public decimal DiferenciaVentaPct { get; init; }
+        public string DiferenciaVentaTexto { get; init; } = "-";
+        public string DiferenciaVentaPctTexto { get; init; } = "-";
+
+        /// <summary>
+        /// La mayor de las dos diferencias porcentuales. Es la que ordena y filtra la vista
+        /// combinada: lo que interesa es que el producto se separe entre sucursales, sin
+        /// importar si se separa al comprarlo o al venderlo.
+        /// </summary>
+        public decimal DiferenciaMayorPct { get; init; }
+        public decimal DiferenciaMayorAbs { get; init; }
 
         /// <summary>Sucursal con el mejor valor y con el peor, según la métrica.</summary>
         public string Mejor { get; init; } = "-";
