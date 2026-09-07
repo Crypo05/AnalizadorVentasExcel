@@ -4,6 +4,61 @@
              xmlns:local="clr-namespace:AnalizadorVentasExcel"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+
+        <!-- Estilos compartidos por el analizador de ventas y la comparativa de precios.
+             La casilla se enlaza a OpcionFiltro.Seleccionado, no a ListBoxItem.IsSelected:
+             así el estado marcado vive en el modelo y sobrevive al filtrado del buscador. -->
+        <Style x:Key="CheckListStyle" TargetType="ListBox">
+            <Setter Property="BorderBrush" Value="#BDC3C7"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="MaxHeight" Value="82"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border Background="Transparent" Padding="2">
+                                        <ContentPresenter/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="ItemTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <CheckBox Content="{Binding Nombre}"
+                                  IsChecked="{Binding Seleccionado, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  HorizontalAlignment="Stretch" Cursor="Hand" ToolTip="{Binding Nombre}"/>
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Caja de búsqueda con texto de ayuda detrás cuando está vacía. -->
+        <Style x:Key="PistaBusqueda" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#95A5A6"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontStyle" Value="Italic"/>
+            <Setter Property="Margin" Value="5,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+        </Style>
+
+        <Style x:Key="BotonMini" TargetType="Button">
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="Padding" Value="4,0"/>
+            <Setter Property="Margin" Value="3,0,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+
     </Application.Resources>
 </Application>

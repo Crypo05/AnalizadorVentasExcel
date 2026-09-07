@@ -24,7 +24,7 @@ namespace AnalizadorVentasExcel
 {
     public partial class MainWindow : Window
     {
-        public const string VersionActual = "1.7.0";
+        public const string VersionActual = "1.8.0";
 
         private AnalisisService? _motor;
         private bool _cargandoFiltros;
@@ -33,6 +33,9 @@ namespace AnalizadorVentasExcel
         private CultureInfo _culturaCR = CultureInfo.InvariantCulture;
 
         private List<AnalisisService.ProductoExplorado> _productosExplorados = new();
+
+        /// <summary>Ventana del sistema de comparativa de precios; se reutiliza si sigue abierta.</summary>
+        private VentanaComparativa? _ventanaComparativa;
 
         // Colecciones de los checklists. La selección vive aquí (en OpcionFiltro), no en
         // ListBox.SelectedItems, para que el buscador pueda ocultar elementos sin desmarcarlos.
@@ -567,6 +570,27 @@ namespace AnalizadorVentasExcel
 
         private void BtnAyuda_Click(object sender, RoutedEventArgs e)
             => new VentanaGuia { Owner = this }.ShowDialog();
+
+        /// <summary>
+        /// La comparativa de precios es un sistema aparte: lee otros archivos (listas de
+        /// precios, sin ventas ni periodos) y no comparte los datos cargados aquí, así que
+        /// vive en su propia ventana no modal para poder trabajar con las dos a la vez.
+        /// </summary>
+        private void BtnComparativa_Click(object sender, RoutedEventArgs e)
+        {
+            if (_ventanaComparativa == null || !_ventanaComparativa.IsLoaded)
+            {
+                _ventanaComparativa = new VentanaComparativa { Owner = this };
+                _ventanaComparativa.Closed += (_, _) => _ventanaComparativa = null;
+                _ventanaComparativa.Show();
+            }
+            else
+            {
+                if (_ventanaComparativa.WindowState == WindowState.Minimized)
+                    _ventanaComparativa.WindowState = WindowState.Normal;
+                _ventanaComparativa.Activate();
+            }
+        }
 
         // ==========================================
         // VARIOS

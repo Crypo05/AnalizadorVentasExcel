@@ -1,0 +1,226 @@
+﻿<Window x:Class="AnalizadorVentasExcel.VentanaComparativa"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
+        mc:Ignorable="d"
+        Title="Comparativa de Precios" Height="850" Width="1300"
+        WindowStartupLocation="CenterOwner">
+
+    <Window.Resources>
+        <!-- Celda numérica: alineada a la derecha, que es como se leen los precios. -->
+        <Style x:Key="CeldaNumerica" TargetType="TextBlock">
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+        </Style>
+
+        <Style x:Key="EtiquetaResumen" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="#7F8C8D"/>
+        </Style>
+
+        <Style x:Key="ValorResumen" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#2C3E50"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="320"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#F4F6F6" BorderBrush="#D0D3D4" BorderThickness="0,0,1,0">
+            <Grid Margin="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                    <TextBlock Text="⚖️ Comparativa de Precios" FontSize="18" FontWeight="Bold" Foreground="#2C3E50"/>
+                    <TextBlock Text="Sistema independiente del análisis de ventas."
+                               FontSize="10" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <GroupBox Grid.Row="1" Header="1. Listas de precios" Margin="0,0,0,5" BorderBrush="#BDC3C7">
+                    <StackPanel Margin="5">
+                        <Button x:Name="BtnCargarPrecios" Content="📂 Seleccionar Carpeta" Height="30"
+                                Click="BtnCargarPrecios_Click" Background="#8E44AD" Foreground="White"
+                                FontWeight="Bold" Cursor="Hand"
+                                ToolTip="Elegí cualquier Excel de la carpeta: se cargan todos, uno por sucursal"/>
+                        <ProgressBar x:Name="BarraProgreso" Height="4" Margin="0,4,0,0" IsIndeterminate="True"
+                                     Visibility="Collapsed" Foreground="#8E44AD" Background="Transparent" BorderThickness="0"/>
+                        <TextBlock x:Name="TxtEstadoArchivo" Text="Sin listas cargadas" FontSize="10" Margin="0,2,0,0"
+                                   Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Grid.Row="2" Header="2. Sucursales a comparar" Margin="0,0,0,5" BorderBrush="#BDC3C7">
+                    <StackPanel Margin="5">
+                        <DockPanel LastChildFill="False" Margin="0,0,0,2">
+                            <TextBlock Text="Columnas de la tabla:" FontWeight="SemiBold" FontSize="11"/>
+                            <Button Content="Ninguna" Click="BtnNingunaSucursal_Click" DockPanel.Dock="Right" Style="{StaticResource BotonMini}"/>
+                            <Button Content="Todas" Click="BtnTodasSucursal_Click" DockPanel.Dock="Right" Style="{StaticResource BotonMini}"/>
+                        </DockPanel>
+                        <ListBox x:Name="LstSucursales" Style="{StaticResource CheckListStyle}" MaxHeight="120"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Grid.Row="3" Header="3. Qué comparar y qué mostrar" BorderBrush="#BDC3C7" Margin="0,0,0,5">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="Comparar por:" FontWeight="SemiBold"/>
+                            <!-- El orden de estos elementos corresponde a MetricaPrecio. -->
+                            <ComboBox x:Name="CmbMetrica" Padding="4" Margin="0,0,0,8"
+                                      SelectionChanged="Opcion_Seleccionada" SelectedIndex="0">
+                                <ComboBoxItem Content="Precio de venta (IVI)"/>
+                                <ComboBoxItem Content="Precio de costo"/>
+                                <ComboBoxItem Content="% de utilidad"/>
+                            </ComboBox>
+
+                            <TextBlock Text="Productos:" FontWeight="SemiBold"/>
+                            <!-- El orden de estos elementos corresponde a PresenciaMinima. -->
+                            <ComboBox x:Name="CmbPresencia" Padding="4" Margin="0,0,0,8"
+                                      SelectionChanged="Opcion_Seleccionada" SelectedIndex="0">
+                                <ComboBoxItem Content="En 2 o más sucursales"/>
+                                <ComboBoxItem Content="Sólo los que están en todas"/>
+                                <ComboBoxItem Content="Todos (incluye exclusivos)"/>
+                            </ComboBox>
+
+                            <CheckBox x:Name="ChkSoloDiferencia" Content="Sólo los que tienen diferencia"
+                                      Margin="0,0,0,8" Cursor="Hand" Click="Opcion_Cambiada"
+                                      ToolTip="Oculta los productos con el mismo valor en todas las sucursales"/>
+
+                            <TextBlock Text="Diferencia mínima:" FontWeight="SemiBold"/>
+                            <ComboBox x:Name="CmbUmbral" Padding="4" Margin="0,0,0,8"
+                                      SelectionChanged="Opcion_Seleccionada" SelectedIndex="0">
+                                <ComboBoxItem Content="Sin mínimo" Tag="0"/>
+                                <ComboBoxItem Content="5 % o más" Tag="5"/>
+                                <ComboBoxItem Content="10 % o más" Tag="10"/>
+                                <ComboBoxItem Content="25 % o más" Tag="25"/>
+                                <ComboBoxItem Content="50 % o más" Tag="50"/>
+                            </ComboBox>
+
+                            <TextBlock Text="Ordenar por:" FontWeight="SemiBold"/>
+                            <!-- El orden de estos elementos corresponde a OrdenComparativa. -->
+                            <ComboBox x:Name="CmbOrden" Padding="4" Margin="0,0,0,8"
+                                      SelectionChanged="Opcion_Seleccionada" SelectedIndex="0">
+                                <ComboBoxItem Content="Mayor diferencia %"/>
+                                <ComboBoxItem Content="Mayor diferencia absoluta"/>
+                                <ComboBoxItem Content="Código"/>
+                                <ComboBoxItem Content="Descripción"/>
+                            </ComboBox>
+
+                            <TextBlock Text="Buscar producto:" FontWeight="SemiBold"/>
+                            <Grid Margin="0,0,0,2">
+                                <TextBox x:Name="TxtBuscarProducto" Padding="3,2" FontSize="11"
+                                         TextChanged="TxtBuscarProducto_TextChanged"
+                                         ToolTip="Busca en el código de barras y en el nombre de cualquiera de las sucursales"/>
+                                <TextBlock x:Name="PistaProducto" Text="🔎 Código o nombre..." Style="{StaticResource PistaBusqueda}"/>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </GroupBox>
+
+                <StackPanel Grid.Row="4" Margin="5,8,5,0">
+                    <Separator Margin="0,0,0,8"/>
+                    <TextBlock Text="Verde: mejor valor  •  Rojo: peor valor  •  —: no está en esa sucursal"
+                               FontSize="9" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="15">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="2*"/>
+                <RowDefinition Height="5"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                <TextBlock x:Name="TxtTitulo" Text="Comparativa de precios entre sucursales"
+                           FontSize="20" FontWeight="Bold" Foreground="#34495E"/>
+                <TextBlock x:Name="TxtSubtitulo" Text="Cargue una carpeta con las listas de precios de cada sucursal para empezar."
+                           FontSize="14" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="#F8F9F9" BorderBrush="#E5E7E9" BorderThickness="1"
+                    Padding="14,8" Margin="0,0,0,10">
+                <UniformGrid Columns="5">
+                    <StackPanel>
+                        <TextBlock Text="Comparables" Style="{StaticResource EtiquetaResumen}"/>
+                        <TextBlock x:Name="TxtComparables" Text="-" Style="{StaticResource ValorResumen}"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="Con diferencia" Style="{StaticResource EtiquetaResumen}"/>
+                        <TextBlock x:Name="TxtConDiferencia" Text="-" Style="{StaticResource ValorResumen}" Foreground="#C0392B"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="Con el mismo valor" Style="{StaticResource EtiquetaResumen}"/>
+                        <TextBlock x:Name="TxtIguales" Text="-" Style="{StaticResource ValorResumen}" Foreground="#1E8E3E"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="En una sola sucursal" Style="{StaticResource EtiquetaResumen}"/>
+                        <TextBlock x:Name="TxtExclusivos" Text="-" Style="{StaticResource ValorResumen}"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="Diferencia promedio" Style="{StaticResource EtiquetaResumen}"/>
+                        <TextBlock x:Name="TxtPromedio" Text="-" Style="{StaticResource ValorResumen}" Foreground="#8E44AD"/>
+                    </StackPanel>
+                </UniformGrid>
+            </Border>
+
+            <DataGrid x:Name="GridComparativa" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                      BorderThickness="1" BorderBrush="#E5E7E9" Padding="5"
+                      CanUserSortColumns="True"
+                      EnableRowVirtualization="True"
+                      ScrollViewer.CanContentScroll="True"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Código" Binding="{Binding Codigo}" Width="1.1*" MinWidth="105" FontFamily="Consolas" FontSize="11"/>
+                    <DataGridTextColumn Header="Descripción" Binding="{Binding Descripcion}" Width="3*" MinWidth="160">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="ToolTip" Value="{Binding DetalleDescripciones}"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+
+                    <!-- Aquí se insertan en código una columna por sucursal comparada. -->
+
+                    <DataGridTextColumn x:Name="ColumnaDiferencia" Header="Dif." Binding="{Binding DiferenciaTexto}"
+                                        SortMemberPath="Diferencia" Width="1*"
+                                        ElementStyle="{StaticResource CeldaNumerica}" FontWeight="SemiBold"/>
+                    <DataGridTextColumn Header="Dif. %" Binding="{Binding DiferenciaPctTexto}"
+                                        SortMemberPath="DiferenciaPct" Width="0.8*"
+                                        ElementStyle="{StaticResource CeldaNumerica}" FontWeight="Bold" Foreground="#C0392B"/>
+                    <DataGridTextColumn x:Name="ColumnaMejor" Header="Más barata" Binding="{Binding Mejor}" Width="1.1*"
+                                        FontSize="11" Foreground="#1E8E3E"/>
+                    <DataGridTextColumn x:Name="ColumnaPeor" Header="Más cara" Binding="{Binding Peor}" Width="1.1*"
+                                        FontSize="11" Foreground="#C0392B"/>
+                    <DataGridTextColumn Header="Suc." Binding="{Binding PresenciaTexto}" SortMemberPath="Presencia"
+                                        Width="0.5*" FontSize="11" Foreground="DimGray"/>
+                    <DataGridTextColumn Header="Aviso" Binding="{Binding Aviso}" Width="1.6*" MinWidth="120" FontSize="11" Foreground="#B9770E"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <GridSplitter Grid.Row="3" Height="5" HorizontalAlignment="Stretch" Background="#ECF0F1"/>
+
+            <Border Grid.Row="4" MinHeight="150" Margin="0,10,0,0" BorderBrush="#E5E7E9" BorderThickness="1"
+                    Padding="10" Background="White">
+                <lvc:CartesianChart x:Name="GraficoComparativa" LegendPosition="Hidden"/>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
