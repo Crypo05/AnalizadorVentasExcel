@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -24,7 +25,24 @@ namespace AnalizadorVentasExcel
 {
     public partial class MainWindow : Window
     {
-        public const string VersionActual = "1.8.0";
+        /// <summary>
+        /// Versión instalada, leída de los metadatos del ejecutable (la define
+        /// &lt;Version&gt; en el .csproj). Antes era una constante escrita a mano acá, que
+        /// se desincronizaba de los metadatos del archivo: el .exe decía 1.0.0.0 mientras
+        /// la app mostraba 1.7.0.
+        ///
+        /// Se recorta a mayor.menor.parche a propósito: el ensamblado siempre trae cuatro
+        /// números ("1.8.0.0") y las etiquetas de los releases traen tres ("1.8.0"), y
+        /// <see cref="Version"/> considera que 1.8.0.0 es MAYOR que 1.8.0. Sin el recorte,
+        /// el actualizador nunca daría "al día".
+        /// </summary>
+        public static readonly string VersionActual = LeerVersion();
+
+        private static string LeerVersion()
+        {
+            var v = Assembly.GetExecutingAssembly().GetName().Version;
+            return v == null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
 
         private AnalisisService? _motor;
         private bool _cargandoFiltros;

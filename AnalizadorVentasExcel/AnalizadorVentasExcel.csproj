@@ -11,6 +11,14 @@
 		<Company>Nomada</Company>
 		<Product>Analizador Corporativo</Product>
 		<Copyright>© 2026 Mateo Sanabria</Copyright>
+		<Description>Análisis de ventas y comparativa de precios entre sucursales.</Description>
+
+		<!-- Fuente única de la versión: de acá salen los metadatos del .exe y también la
+		     que muestra la app y compara el actualizador (MainWindow.VersionActual la lee
+		     del ensamblado). Al publicar una versión nueva se cambia solo este número,
+		     y la etiqueta del release en GitHub tiene que coincidir. -->
+		<Version>1.8.0</Version>
+		<AssemblyTitle>Analizador Corporativo</AssemblyTitle>
 
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
