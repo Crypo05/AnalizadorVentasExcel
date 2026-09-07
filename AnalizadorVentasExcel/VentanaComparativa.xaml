@@ -131,6 +131,10 @@
 
                 <StackPanel Grid.Row="4" Margin="5,8,5,0">
                     <Separator Margin="0,0,0,8"/>
+                    <Button x:Name="BtnExportar" Content="📊 Exportar a Excel" Height="30" Margin="0,0,0,8"
+                            Click="BtnExportar_Click" Background="#16A085" Foreground="White"
+                            FontWeight="Bold" Cursor="Hand" IsEnabled="False"
+                            ToolTip="Guarda en .xlsx exactamente los productos y las columnas que muestra la tabla"/>
                     <TextBlock Text="Verde: mejor valor  •  Rojo: peor valor  •  —: no está en esa sucursal"
                                FontSize="9" Foreground="#7F8C8D" TextWrapping="Wrap"/>
                 </StackPanel>

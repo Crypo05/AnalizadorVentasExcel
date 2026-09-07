@@ -360,6 +360,25 @@ namespace AnalizadorVentasExcel.Modelos
                         Descripcion = "Seleccioná una fila de la tabla y el gráfico muestra ese producto sucursal por " +
                                       "sucursal, con el valor sobre cada barra. Es la forma rápida de enseñarle a alguien " +
                                       "una diferencia concreta."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "📊 Exportar a Excel",
+                        Descripcion = "Guarda en un .xlsx exactamente lo que estás viendo: los mismos productos, en el " +
+                                      "mismo orden y con las mismas columnas, incluida una por cada sucursal comparada. " +
+                                      "Lo que hayas filtrado o buscado se respeta, así que si querés el archivo completo " +
+                                      "acordate de limpiar los filtros antes. Cambiar de métrica cambia el archivo: " +
+                                      "exportando por costo, las columnas dicen costo."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Cómo viene el archivo exportado",
+                        Descripcion = "Los importes van como números de verdad, no como texto: se ven igual que en " +
+                                      "pantalla (₡1 675,00) pero se pueden sumar, ordenar y usar en tablas dinámicas. " +
+                                      "Los códigos van como texto a propósito, para que Excel no se coma los ceros del " +
+                                      "principio. Las sucursales donde el producto no existe quedan en blanco, que es " +
+                                      "el equivalente al \"—\" de la tabla. La hoja viene con la fila de títulos " +
+                                      "congelada y con autofiltro puesto."
                     }
                 }
             }
