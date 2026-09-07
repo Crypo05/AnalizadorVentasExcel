@@ -192,6 +192,7 @@ namespace AnalizadorVentasExcel
             _sucursalesComparadas = new List<string>();
             foreach (var t in new[] { TxtComparables, TxtConDiferencia, TxtIguales, TxtExclusivos, TxtPromedio })
                 t.Text = "-";
+            BtnExportar.IsEnabled = false;
         }
 
         // ==========================================
@@ -207,6 +208,7 @@ namespace AnalizadorVentasExcel
                 GridComparativa.ItemsSource = null;
                 GraficoComparativa.Series = Array.Empty<ISeries>();
                 TxtSubtitulo.Text = "Marque al menos una sucursal para comparar.";
+                BtnExportar.IsEnabled = false;
                 return;
             }
 
@@ -234,6 +236,80 @@ namespace AnalizadorVentasExcel
 
             EtiquetarColumnas(_metricaVista);
             MostrarResumen(resultado);
+
+            BtnExportar.IsEnabled = _filas.Count > 0;
+        }
+
+        // ==========================================
+        // EXPORTACIÓN
+        // ==========================================
+
+        /// <summary>
+        /// Exporta lo mismo que está viendo el usuario: las filas que quedaron después de
+        /// los filtros, en el orden en que están, y con las mismas columnas (incluida una
+        /// por sucursal comparada). Cambiar un filtro y volver a exportar da otro archivo.
+        /// </summary>
+        private void BtnExportar_Click(object sender, RoutedEventArgs e)
+        {
+            if (_filas.Count == 0)
+            {
+                MessageBox.Show("No hay nada que exportar: la tabla está vacía.", "Sin datos");
+                return;
+            }
+
+            var dialogo = new SaveFileDialog
+            {
+                Title = "Guardar la comparativa",
+                Filter = "Libro de Excel|*.xlsx",
+                FileName = NombreSugerido(),
+                DefaultExt = ".xlsx",
+                AddExtension = true,
+                OverwritePrompt = true
+            };
+            if (dialogo.ShowDialog() != true) return;
+
+            try
+            {
+                ExportadorExcel.ExportarComparativa(dialogo.FileName, _filas, _sucursalesComparadas, _metricaVista);
+
+                Estado($"Exportados {_filas.Count.ToString("N0", ResumenDinamico.FormatoCR)} productos a " +
+                       $"{Path.GetFileName(dialogo.FileName)}", Brushes.Green);
+
+                var abrir = MessageBox.Show(
+                    $"Se guardaron {_filas.Count.ToString("N0", ResumenDinamico.FormatoCR)} productos en:\n" +
+                    $"{dialogo.FileName}\n\n¿Abrir el archivo ahora?",
+                    "Exportación lista", MessageBoxButton.YesNo, MessageBoxImage.Information);
+
+                if (abrir == MessageBoxResult.Yes)
+                    Process.Start(new ProcessStartInfo(dialogo.FileName) { UseShellExecute = true });
+            }
+            catch (IOException ex)
+            {
+                // Lo más común con diferencia: el archivo quedó abierto en Excel.
+                MessageBox.Show(
+                    "No se pudo escribir el archivo. Si lo tenés abierto en Excel, cerralo y probá de nuevo.\n\n" +
+                    ex.Message, "No se pudo guardar");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                MessageBox.Show("No hay permisos para escribir en esa carpeta. Probá guardarlo en el Escritorio.",
+                                "No se pudo guardar");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Error al exportar");
+            }
+        }
+
+        private string NombreSugerido()
+        {
+            string metrica = _metricaVista switch
+            {
+                MetricaPrecio.Costo => "costos",
+                MetricaPrecio.Utilidad => "utilidad",
+                _ => "precios"
+            };
+            return $"Comparativa de {metrica} {DateTime.Now:yyyy-MM-dd}.xlsx";
         }
 
         private decimal UmbralElegido()
