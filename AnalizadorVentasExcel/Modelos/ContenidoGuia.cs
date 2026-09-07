@@ -278,6 +278,90 @@ namespace AnalizadorVentasExcel.Modelos
                                       "análisis normal."
                     }
                 }
+            },
+
+            new SeccionGuia
+            {
+                Titulo = "6. Comparativa de Precios (⚖️ botón morado)",
+                Resumen = "Un sistema aparte, con su propia ventana y sus propios archivos. No usa los datos de " +
+                          "ventas: lee las listas de precios de cada sucursal y compara, producto por producto, " +
+                          "cuánto cuesta lo mismo en cada tienda. Se puede tener abierta a la vez que el análisis.",
+                Entradas =
+                {
+                    new EntradaGuia
+                    {
+                        Nombre = "Qué archivos necesita",
+                        Descripcion = "Los reportes de \"Comparativa de precios\", no los de ventas. Se reconocen por su " +
+                                      "encabezado: \"Cód. Artículo\", \"Descripción\", \"Precio costo\", \"Imp. ventas\", " +
+                                      "\"Porc. utilidad - artículo\" y \"Precio IVI - artículo\". Poné una lista por sucursal " +
+                                      "en una misma carpeta y elegí cualquiera de ellas: se cargan todas. Si algún archivo " +
+                                      "no tiene ese encabezado, se ignora y el programa te dice cuál."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "El nombre del archivo es el nombre de la sucursal",
+                        Descripcion = "Se le quitan la fecha y la palabra \"precios\": \"precios la bomba 07-09-26.xlsx\" " +
+                                      "queda como sucursal \"la bomba\". Con eso el encabezado de la columna es corto y legible."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Sucursales a comparar",
+                        Descripcion = "Cada sucursal marcada es una columna de la tabla. Desmarcá las que no te interesen " +
+                                      "para comparar solo dos, o dejalas todas para ver el panorama completo. Los totales " +
+                                      "de arriba y el color de cada celda se recalculan con las sucursales marcadas."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Comparar por",
+                        Descripcion = "\"Precio de venta (IVI)\" es lo que paga el cliente: sirve para detectar que el mismo " +
+                                      "producto se vende más caro en una tienda. \"Precio de costo\" compara lo que costó " +
+                                      "comprarlo, que es donde aparecen los problemas de negociación con el proveedor. " +
+                                      "\"% de utilidad\" compara el margen. En precio y costo el mejor valor es el más bajo; " +
+                                      "en utilidad, el más alto (y las columnas cambian de nombre para recordarlo)."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Productos",
+                        Descripcion = "\"En 2 o más sucursales\" es lo normal: solo lo que se puede comparar. \"Sólo los que " +
+                                      "están en todas\" deja los productos que maneja toda la cadena. \"Todos\" agrega los " +
+                                      "exclusivos de una sola tienda, que aparecen con — en las demás columnas y con el aviso " +
+                                      "\"Sólo en ...\": útil para ver qué le falta a una sucursal."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Sólo los que tienen diferencia · Diferencia mínima · Ordenar por · Buscar",
+                        Descripcion = "Filtros de la vista. La casilla esconde los productos que valen igual en todas partes; " +
+                                      "la \"Diferencia mínima\" deja solo los que se separan más de ese porcentaje; el orden " +
+                                      "por defecto pone arriba las mayores diferencias porcentuales. El buscador mira el " +
+                                      "código de barras y el nombre en cualquiera de las sucursales."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "Cómo leer la tabla",
+                        Descripcion = "Una columna por sucursal, en verde el mejor valor y en rojo el peor (si el producto " +
+                                      "vale lo mismo en todas, no se pinta nada). \"Dif.\" es la diferencia en colones entre " +
+                                      "la sucursal más cara y la más barata, y \"Dif. %\" esa misma diferencia respecto del " +
+                                      "valor más bajo. \"Suc.\" dice en cuántas de las sucursales comparadas está el producto."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "El aviso \"⚠ Nombres distintos\"",
+                        Descripcion = "El cruce se hace por código de artículo, que es la única llave fiable: el mismo " +
+                                      "producto suele estar escrito distinto en cada tienda (\"PASTILLAS ALEVE GELS UND\" " +
+                                      "contra \"ALEVE GEL UND\"). Cuando los nombres no coinciden se marca la fila, y el " +
+                                      "nombre de cada sucursal aparece al pasar el mouse por la columna Descripción. " +
+                                      "Casi siempre es solo un tema de digitación, pero a veces revela que el mismo código " +
+                                      "está usado para dos productos diferentes: por eso conviene mirarlo antes de sacar " +
+                                      "conclusiones de una diferencia grande."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "El gráfico de abajo",
+                        Descripcion = "Seleccioná una fila de la tabla y el gráfico muestra ese producto sucursal por " +
+                                      "sucursal, con el valor sobre cada barra. Es la forma rápida de enseñarle a alguien " +
+                                      "una diferencia concreta."
+                    }
+                }
             }
         };
 
@@ -339,11 +423,45 @@ namespace AnalizadorVentasExcel.Modelos
                 Objetivo = "Ver qué familias vende cada proveedor",
                 Pasos = "Eje X: Proveedor  •  Desglose: Familia. Recordá que solo se dibujan las 10 series mayores, " +
                         "pero la tabla las trae todas."
+            },
+            new RecetaGuia
+            {
+                Objetivo = "¿En qué productos le estamos cobrando de más (o de menos) que la otra sucursal?",
+                Pasos = "⚖️ Comparativa de Precios  •  cargá la carpeta de listas de precios  •  Comparar por: Precio de " +
+                        "venta (IVI)  •  Productos: En 2 o más sucursales  •  Ordenar por: Mayor diferencia %. Arriba " +
+                        "quedan los casos más gruesos; revisá el aviso de nombres distintos antes de decidir, porque a " +
+                        "veces son dos presentaciones distintas con el mismo código."
+            },
+            new RecetaGuia
+            {
+                Objetivo = "¿Estamos comprando lo mismo a precios distintos según la tienda?",
+                Pasos = "⚖️ Comparativa de Precios  •  Comparar por: Precio de costo  •  Diferencia mínima: 10 % o más. " +
+                        "Lo que salga es materia de negociación con el proveedor o error de digitación en la caja."
+            },
+            new RecetaGuia
+            {
+                Objetivo = "¿Qué productos vende la otra sucursal que nosotros ni tenemos?",
+                Pasos = "⚖️ Comparativa de Precios  •  Productos: Todos (incluye exclusivos)  •  Ordenar por: Descripción. " +
+                        "Las filas con — y el aviso \"Sólo en ...\" son las que existen en una sola tienda."
             }
         };
 
         public static List<EntradaGuia> Notas() => new()
         {
+            new EntradaGuia
+            {
+                Nombre = "La comparativa de precios no comparte datos con el análisis",
+                Descripcion = "Son dos sistemas distintos y cada uno carga su propia carpeta. Cargar ventas no llena la " +
+                              "comparativa, ni al revés. Tampoco hay periodos: la lista de precios es una foto del día en " +
+                              "que se exportó, así que la fecha del archivo es toda la referencia temporal que hay."
+            },
+            new EntradaGuia
+            {
+                Nombre = "En la comparativa, un código = un producto",
+                Descripcion = "Si el mismo código aparece dos veces dentro de la lista de una sucursal, se toma la primera " +
+                              "aparición. Y las filas sin costo, sin precio y sin utilidad (las tres en cero) no se cargan: " +
+                              "no hay nada que comparar y ensuciarían el ranking de diferencias."
+            },
             new EntradaGuia
             {
                 Nombre = "El % de Utilidad es un promedio simple",

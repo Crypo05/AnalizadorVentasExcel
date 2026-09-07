@@ -73,12 +73,12 @@
 
                 <ItemsControl x:Name="ListaSecciones" ItemTemplate="{StaticResource PlantillaSeccion}"/>
 
-                <TextBlock Text="6. Combinaciones útiles" Style="{StaticResource TituloSeccion}"/>
+                <TextBlock Text="7. Combinaciones útiles" Style="{StaticResource TituloSeccion}"/>
                 <TextBlock Style="{StaticResource ResumenSeccion}"
                            Text="Recetas concretas: qué poner en cada control para responder una pregunta de negocio."/>
                 <ItemsControl x:Name="ListaRecetas" ItemTemplate="{StaticResource PlantillaReceta}"/>
 
-                <TextBlock Text="7. Cosas que conviene saber de los datos" Style="{StaticResource TituloSeccion}"/>
+                <TextBlock Text="8. Cosas que conviene saber de los datos" Style="{StaticResource TituloSeccion}"/>
                 <TextBlock Style="{StaticResource ResumenSeccion}"
                            Text="Limitaciones reales del cálculo y del archivo de origen. Leerlas evita malinterpretar los números."/>
                 <ItemsControl x:Name="ListaNotas" ItemTemplate="{StaticResource PlantillaEntrada}"/>

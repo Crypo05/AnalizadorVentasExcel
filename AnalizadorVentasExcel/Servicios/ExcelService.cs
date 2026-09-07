@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AnalizadorVentasExcel.Modelos;
 using ExcelDataReader;
+using static AnalizadorVentasExcel.Servicios.CeldasExcel;
 
 namespace AnalizadorVentasExcel.Servicios
 {
@@ -39,11 +38,7 @@ namespace AnalizadorVentasExcel.Servicios
     /// </summary>
     public sealed class ExcelService
     {
-        static ExcelService()
-        {
-            // Necesario para los .xls antiguos (páginas de códigos no-Unicode).
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        }
+        static ExcelService() => Preparar();
 
         public async Task<ResultadoCarga> CargarCarpetaAsync(
             IReadOnlyList<string> archivos, string? modo,
@@ -259,61 +254,6 @@ namespace AnalizadorVentasExcel.Servicios
                 else if (val == "total" || val == "total venta") colTotal = c;
                 else if (val.Contains("utilidad") || val.Contains("%")) colUtil = c;
             }
-        }
-
-        private static bool EsFilaVacia(IExcelDataReader reader)
-        {
-            for (int c = 0; c < reader.FieldCount; c++)
-                if (!reader.IsDBNull(c)) return false;
-            return true;
-        }
-
-        /// <summary>Valor de la celda como texto, equivalente al GetString() anterior.</summary>
-        private static string Texto(IExcelDataReader reader, int col)
-        {
-            if (col < 0 || col >= reader.FieldCount || reader.IsDBNull(col)) return string.Empty;
-            object v = reader.GetValue(col);
-            return v switch
-            {
-                null => string.Empty,
-                string s => s,
-                double d => d.ToString(CultureInfo.InvariantCulture),
-                DateTime dt => dt.ToString("yyyy-MM", CultureInfo.InvariantCulture),
-                bool b => b ? "True" : "False",
-                _ => Convert.ToString(v, CultureInfo.InvariantCulture) ?? string.Empty
-            };
-        }
-
-        private static bool LeerDecimal(IExcelDataReader reader, int col, out decimal valor)
-        {
-            valor = 0m;
-            if (col < 0 || col >= reader.FieldCount || reader.IsDBNull(col)) return false;
-
-            object v = reader.GetValue(col);
-            switch (v)
-            {
-                case double d:
-                    if (double.IsNaN(d) || double.IsInfinity(d)) return false;
-                    try { valor = (decimal)d; } catch (OverflowException) { return false; }
-                    return true;
-                case decimal m:
-                    valor = m; return true;
-                case int i:
-                    valor = i; return true;
-                case string s:
-                    return ParseDecimalFlexible(s, out valor);
-                default:
-                    return false;
-            }
-        }
-
-        private static bool ParseDecimalFlexible(string t, out decimal r)
-        {
-            r = 0m;
-            if (string.IsNullOrWhiteSpace(t)) return false;
-            string l = t.Replace("%", "").Replace("$", "").Replace("₡", "").Trim();
-            if (decimal.TryParse(l, NumberStyles.Any, CultureInfo.InvariantCulture, out r)) return true;
-            return decimal.TryParse(l, NumberStyles.Any, CultureInfo.GetCultureInfo("es-CR"), out r);
         }
 
         private static string Interno(Dictionary<string, string> pool, string s)
