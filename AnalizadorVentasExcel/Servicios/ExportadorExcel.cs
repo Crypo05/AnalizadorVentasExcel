@@ -68,14 +68,28 @@ namespace AnalizadorVentasExcel.Servicios
         /// <summary>Las mismas columnas de la tabla, incluidos los nombres que cambian con la métrica.</summary>
         private static List<string> Encabezados(IReadOnlyList<string> sucursales, MetricaPrecio metrica)
         {
-            bool utilidad = metrica == MetricaPrecio.Utilidad;
+            var lista = new List<string>(sucursales.Count * 2 + 8) { "Código", "Descripción" };
 
-            var lista = new List<string>(sucursales.Count + 8) { "Código", "Descripción" };
-            lista.AddRange(sucursales);
-            lista.Add(utilidad ? "Dif. (puntos)" : "Dif.");
-            lista.Add("Dif. %");
-            lista.Add(utilidad ? "Mayor utilidad" : "Más barata");
-            lista.Add(utilidad ? "Menor utilidad" : "Más cara");
+            if (ConjuntoPrecios.EsCombinada(metrica))
+            {
+                // Dos columnas por sucursal, y las de "Más barata"/"Más cara" se omiten
+                // igual que en la tabla: con cuatro columnas de diferencia sobran.
+                foreach (string s in sucursales) { lista.Add($"{s} costo"); lista.Add($"{s} venta"); }
+                lista.Add("Dif. costo");
+                lista.Add("Dif. costo %");
+                lista.Add("Dif. venta");
+                lista.Add("Dif. venta %");
+            }
+            else
+            {
+                bool utilidad = metrica == MetricaPrecio.Utilidad;
+                lista.AddRange(sucursales);
+                lista.Add(utilidad ? "Dif. (puntos)" : "Dif.");
+                lista.Add("Dif. %");
+                lista.Add(utilidad ? "Mayor utilidad" : "Más barata");
+                lista.Add(utilidad ? "Menor utilidad" : "Más cara");
+            }
+
             lista.Add("Suc.");
             lista.Add("Aviso");
             return lista;
@@ -85,7 +99,9 @@ namespace AnalizadorVentasExcel.Servicios
                                             IReadOnlyList<string> sucursales, MetricaPrecio metrica,
                                             List<string> encabezados)
         {
+            bool combinada = ConjuntoPrecios.EsCombinada(metrica);
             int estiloValor = metrica == MetricaPrecio.Utilidad ? EstiloUtilidad : EstiloMoneda;
+            int porSucursal = combinada ? 2 : 1;
             int columnas = encabezados.Count;
             int totalFilas = filas.Count + 1;
 
@@ -125,12 +141,12 @@ namespace AnalizadorVentasExcel.Servicios
                 CeldaTexto(sb, c++, fila, f.Codigo, EstiloTexto);
                 CeldaTexto(sb, c++, fila, f.Descripcion, EstiloNormal);
 
-                for (int s = 0; s < sucursales.Count; s++, c++)
+                for (int v = 0; v < sucursales.Count * porSucursal; v++, c++)
                 {
                     // Sin valor no se escribe la celda: en la tabla se ve "—" y acá queda
                     // vacía, que es lo que Excel entiende como "este producto no está".
-                    decimal? v = s < f.Valores.Length ? f.Valores[s] : null;
-                    if (v.HasValue) CeldaNumero(sb, c, fila, v.Value, estiloValor);
+                    decimal? valor = v < f.Valores.Length ? f.Valores[v] : null;
+                    if (valor.HasValue) CeldaNumero(sb, c, fila, valor.Value, estiloValor);
                 }
 
                 bool comparable = f.Presencia >= 2;
@@ -140,8 +156,22 @@ namespace AnalizadorVentasExcel.Servicios
                 if (comparable && f.Minimo > 0m) CeldaNumero(sb, c, fila, f.DiferenciaPct, EstiloPorcentaje);
                 c++;
 
-                CeldaTexto(sb, c++, fila, f.Mejor, EstiloNormal);
-                CeldaTexto(sb, c++, fila, f.Peor, EstiloNormal);
+                if (combinada)
+                {
+                    // La segunda diferencia sólo existe en la vista combinada, y se escribe
+                    // con el mismo criterio: en blanco cuando no hay con qué comparar.
+                    if (comparable) CeldaNumero(sb, c, fila, f.DiferenciaVenta, estiloValor);
+                    c++;
+                    if (comparable && f.DiferenciaVentaPctTexto != "-")
+                        CeldaNumero(sb, c, fila, f.DiferenciaVentaPct, EstiloPorcentaje);
+                    c++;
+                }
+                else
+                {
+                    CeldaTexto(sb, c++, fila, f.Mejor, EstiloNormal);
+                    CeldaTexto(sb, c++, fila, f.Peor, EstiloNormal);
+                }
+
                 CeldaTexto(sb, c++, fila, f.PresenciaTexto, EstiloTexto);
                 CeldaTexto(sb, c, fila, f.Aviso, EstiloNormal);
 

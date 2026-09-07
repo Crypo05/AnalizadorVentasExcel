@@ -43,6 +43,9 @@ namespace AnalizadorVentasExcel
         private List<FilaComparativa> _filas = new();
         private MetricaPrecio _metricaVista = MetricaPrecio.PrecioVenta;
 
+        /// <summary>Si la tabla actual muestra costo y venta a la vez (dos columnas por sucursal).</summary>
+        private bool _vistaCombinada;
+
         /// <summary>Índice de la tabla donde empiezan las columnas por sucursal.</summary>
         private const int PrimeraColumnaSucursal = 2;
 
@@ -227,8 +230,12 @@ namespace AnalizadorVentasExcel
 
             var resultado = _motor.Comparar(peticion);
 
-            if (!resultado.Sucursales.SequenceEqual(_sucursalesComparadas, StringComparer.Ordinal))
-                ReconstruirColumnas(resultado.Sucursales);
+            // Las columnas se rehacen si cambian las sucursales o si se entra o sale de la
+            // vista combinada, que lleva dos columnas por sucursal en vez de una.
+            bool combinada = ConjuntoPrecios.EsCombinada(_metricaVista);
+            if (combinada != _vistaCombinada ||
+                !resultado.Sucursales.SequenceEqual(_sucursalesComparadas, StringComparer.Ordinal))
+                ReconstruirColumnas(resultado.Sucursales, combinada);
 
             _filas = resultado.Filas;
             GridComparativa.ItemsSource = _filas;
@@ -307,6 +314,7 @@ namespace AnalizadorVentasExcel
             {
                 MetricaPrecio.Costo => "costos",
                 MetricaPrecio.Utilidad => "utilidad",
+                MetricaPrecio.CostoYVenta => "costos y precios",
                 _ => "precios"
             };
             return $"Comparativa de {metrica} {DateTime.Now:yyyy-MM-dd}.xlsx";
@@ -336,48 +344,113 @@ namespace AnalizadorVentasExcel
         }
 
         /// <summary>
-        /// La tabla lleva una columna por sucursal, así que se construyen en código: el
-        /// enlace es por posición (Textos[i] / Colores[i]) contra los arreglos de la fila.
+        /// La tabla lleva una columna por sucursal —dos en la vista combinada, costo y
+        /// venta—, así que se construyen en código: el enlace es por posición
+        /// (Textos[i] / Colores[i]) contra los arreglos intercalados de la fila.
         /// </summary>
-        private void ReconstruirColumnas(List<string> sucursales)
+        private void ReconstruirColumnas(List<string> sucursales, bool combinada)
         {
             foreach (var c in _columnasSucursal) GridComparativa.Columns.Remove(c);
             _columnasSucursal.Clear();
 
-            for (int i = 0; i < sucursales.Count; i++)
+            var subMetricas = combinada
+                ? new[] { "costo", "venta" }
+                : new[] { string.Empty };
+
+            int posicion = PrimeraColumnaSucursal;
+
+            for (int s = 0; s < sucursales.Count; s++)
             {
-                var estilo = new Style(typeof(TextBlock));
-                estilo.Setters.Add(new Setter(TextBlock.ForegroundProperty, new Binding($"Colores[{i}]")));
-                estilo.Setters.Add(new Setter(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Right));
-                estilo.Setters.Add(new Setter(TextBlock.FontWeightProperty, FontWeights.SemiBold));
-                estilo.Setters.Add(new Setter(TextBlock.MarginProperty, new Thickness(0, 0, 4, 0)));
-
-                var columna = new DataGridTextColumn
+                for (int k = 0; k < subMetricas.Length; k++)
                 {
-                    Header = sucursales[i],
-                    Binding = new Binding($"Textos[{i}]"),
-                    ElementStyle = estilo,
-                    Width = new DataGridLength(1.1, DataGridLengthUnitType.Star),
-                    MinWidth = 95,
-                    // El enlace es por índice y el DataGrid no sabe ordenar por eso:
-                    // el orden se elige en el panel izquierdo.
-                    CanUserSort = false
-                };
+                    int indice = s * subMetricas.Length + k;
 
-                GridComparativa.Columns.Insert(PrimeraColumnaSucursal + i, columna);
-                _columnasSucursal.Add(columna);
+                    var estilo = new Style(typeof(TextBlock));
+                    estilo.Setters.Add(new Setter(TextBlock.ForegroundProperty, new Binding($"Colores[{indice}]")));
+                    estilo.Setters.Add(new Setter(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Right));
+                    estilo.Setters.Add(new Setter(TextBlock.FontWeightProperty, FontWeights.SemiBold));
+                    estilo.Setters.Add(new Setter(TextBlock.MarginProperty, new Thickness(0, 0, 4, 0)));
+
+                    var columna = new DataGridTextColumn
+                    {
+                        Header = combinada ? $"{sucursales[s]} · {subMetricas[k]}" : sucursales[s],
+                        Binding = new Binding($"Textos[{indice}]"),
+                        ElementStyle = estilo,
+                        // Con la vista combinada las columnas se cuentan de a dos por
+                        // sucursal: con anchos proporcionales quedarían aplastadas, así que
+                        // se fijan y la tabla se desplaza en horizontal.
+                        Width = combinada ? new DataGridLength(110) : new DataGridLength(1.1, DataGridLengthUnitType.Star),
+                        MinWidth = combinada ? 100 : 95,
+                        // El enlace es por índice y el DataGrid no sabe ordenar por eso:
+                        // el orden se elige en el panel izquierdo.
+                        CanUserSort = false
+                    };
+
+                    GridComparativa.Columns.Insert(posicion++, columna);
+                    _columnasSucursal.Add(columna);
+                }
             }
 
+            AjustarColumnasFijas(combinada);
             _sucursalesComparadas = sucursales;
+            _vistaCombinada = combinada;
+        }
+
+        /// <summary>
+        /// Las columnas declaradas en el XAML usan anchos proporcionales, que reparten el
+        /// espacio disponible. Eso funciona con pocas columnas, pero en la vista combinada
+        /// (hasta veintipico) hay que pasarlas a ancho fijo o el DataGrid las comprime en
+        /// vez de habilitar el desplazamiento horizontal.
+        /// </summary>
+        private void AjustarColumnasFijas(bool combinada)
+        {
+            ColumnaDiferenciaVenta.Visibility = combinada ? Visibility.Visible : Visibility.Collapsed;
+            ColumnaDiferenciaVentaPct.Visibility = combinada ? Visibility.Visible : Visibility.Collapsed;
+
+            // En la vista combinada las cuatro columnas de diferencia ya dicen quién está
+            // más barata, y el color de cada celda lo remata: mostrar además "Más barata"
+            // y "Más cara" sólo del costo confundiría.
+            ColumnaMejor.Visibility = combinada ? Visibility.Collapsed : Visibility.Visible;
+            ColumnaPeor.Visibility = combinada ? Visibility.Collapsed : Visibility.Visible;
+
+            if (combinada)
+            {
+                ColumnaCodigo.Width = new DataGridLength(115);
+                ColumnaDescripcion.Width = new DataGridLength(230);
+                ColumnaDiferencia.Width = new DataGridLength(105);
+                ColumnaDiferenciaPct.Width = new DataGridLength(90);
+                ColumnaDiferenciaVenta.Width = new DataGridLength(105);
+                ColumnaDiferenciaVentaPct.Width = new DataGridLength(90);
+                ColumnaPresencia.Width = new DataGridLength(50);
+                ColumnaAviso.Width = new DataGridLength(130);
+            }
+            else
+            {
+                ColumnaCodigo.Width = new DataGridLength(1.1, DataGridLengthUnitType.Star);
+                ColumnaDescripcion.Width = new DataGridLength(3, DataGridLengthUnitType.Star);
+                ColumnaDiferencia.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
+                ColumnaDiferenciaPct.Width = new DataGridLength(0.8, DataGridLengthUnitType.Star);
+                ColumnaPresencia.Width = new DataGridLength(0.5, DataGridLengthUnitType.Star);
+                ColumnaAviso.Width = new DataGridLength(1.6, DataGridLengthUnitType.Star);
+            }
         }
 
         /// <summary>En utilidad no hay "más barata": la mejor sucursal es la de mayor margen.</summary>
         private void EtiquetarColumnas(MetricaPrecio metrica)
         {
+            if (ConjuntoPrecios.EsCombinada(metrica))
+            {
+                // Con las dos métricas juntas hay que decir de cuál es cada diferencia.
+                ColumnaDiferencia.Header = "Dif. costo";
+                ColumnaDiferenciaPct.Header = "Dif. costo %";
+                return;
+            }
+
             bool utilidad = metrica == MetricaPrecio.Utilidad;
             ColumnaMejor.Header = utilidad ? "Mayor utilidad" : "Más barata";
             ColumnaPeor.Header = utilidad ? "Menor utilidad" : "Más cara";
             ColumnaDiferencia.Header = utilidad ? "Dif. (puntos)" : "Dif.";
+            ColumnaDiferenciaPct.Header = "Dif. %";
         }
 
         // ==========================================
@@ -392,21 +465,25 @@ namespace AnalizadorVentasExcel
             }
 
             bool utilidad = _metricaVista == MetricaPrecio.Utilidad;
-            var valores = fila.Valores.Select(v => v.HasValue ? (double?)v.Value : null).ToArray();
+            bool combinada = ConjuntoPrecios.EsCombinada(_metricaVista);
 
-            GraficoComparativa.Series = new ISeries[]
-            {
-                new ColumnSeries<double?>
+            // En la vista combinada los valores vienen intercalados (costo, venta) por
+            // sucursal, así que se parten en dos series que quedan una al lado de la otra.
+            GraficoComparativa.Series = combinada
+                ? new ISeries[]
                 {
-                    Name = fila.Descripcion,
-                    Values = valores,
-                    Fill = new SolidColorPaint(new SKColor(0x8E, 0x44, 0xAD)),
-                    DataLabelsPaint = new SolidColorPaint(new SKColor(0x2C, 0x3E, 0x50)),
-                    DataLabelsPosition = DataLabelsPosition.Top,
-                    DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0", ResumenDinamico.FormatoCR),
-                    YToolTipLabelFormatter = p => FilaComparativa.Formatear((decimal)p.Coordinate.PrimaryValue, _metricaVista)
+                    SerieProducto("Costo", Desintercalar(fila.Valores, 0, 2),
+                                  new SKColor(0x8E, 0x44, 0xAD), MetricaPrecio.Costo),
+                    SerieProducto("Venta", Desintercalar(fila.Valores, 1, 2),
+                                  new SKColor(0x16, 0xA0, 0x85), MetricaPrecio.PrecioVenta)
                 }
-            };
+                : new ISeries[]
+                {
+                    SerieProducto(fila.Descripcion, Desintercalar(fila.Valores, 0, 1),
+                                  new SKColor(0x8E, 0x44, 0xAD), _metricaVista)
+                };
+
+            GraficoComparativa.LegendPosition = combinada ? LegendPosition.Top : LegendPosition.Hidden;
 
             GraficoComparativa.XAxes = new[]
             {
@@ -416,8 +493,8 @@ namespace AnalizadorVentasExcel
             {
                 new Axis
                 {
-                    Name = utilidad ? "% de utilidad" : ConjuntoPrecios.NombreDe(_metricaVista),
-                    Labeler = v => utilidad ? $"{v:N0}%" : v.ToString("N0", ResumenDinamico.FormatoCR)
+                    Name = combinada ? "Colones" : utilidad ? "% de utilidad" : ConjuntoPrecios.NombreDe(_metricaVista),
+                    Labeler = v => utilidad && !combinada ? $"{v:N0}%" : v.ToString("N0", ResumenDinamico.FormatoCR)
                 }
             };
 
@@ -427,6 +504,29 @@ namespace AnalizadorVentasExcel
                 ? $"{fila.Codigo} — {fila.Descripcion}  ⚠ el nombre cambia entre sucursales."
                 : $"{fila.Codigo} — {fila.Descripcion}";
         }
+
+        /// <summary>Toma una de cada <paramref name="paso"/> posiciones, empezando en <paramref name="desde"/>.</summary>
+        private static double?[] Desintercalar(decimal?[] valores, int desde, int paso)
+        {
+            var salida = new double?[(valores.Length - desde + paso - 1) / paso];
+            for (int i = desde, n = 0; i < valores.Length; i += paso, n++)
+                salida[n] = valores[i].HasValue ? (double?)valores[i]!.Value : null;
+            return salida;
+        }
+
+        private static ColumnSeries<double?> SerieProducto(string nombre, double?[] valores,
+                                                           SKColor color, MetricaPrecio metrica)
+            => new ColumnSeries<double?>
+            {
+                Name = nombre,
+                Values = valores,
+                Fill = new SolidColorPaint(color),
+                DataLabelsPaint = new SolidColorPaint(new SKColor(0x2C, 0x3E, 0x50)),
+                DataLabelsPosition = DataLabelsPosition.Top,
+                DataLabelsFormatter = p => p.Coordinate.PrimaryValue.ToString("N0", ResumenDinamico.FormatoCR),
+                YToolTipLabelFormatter = p =>
+                    $"{p.Context.Series.Name}: {FilaComparativa.Formatear((decimal)p.Coordinate.PrimaryValue, metrica)}"
+            };
 
         // ==========================================
         // FILTROS

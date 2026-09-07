@@ -321,6 +321,26 @@ namespace AnalizadorVentasExcel.Modelos
                     },
                     new EntradaGuia
                     {
+                        Nombre = "Comparar por → Costo y precio de venta (las dos juntas)",
+                        Descripcion = "La opción distinta de las demás: en vez de una columna por sucursal pone DOS, el costo " +
+                                      "y el precio de venta, una al lado de la otra. Es la vista que contesta la pregunta " +
+                                      "que las otras dejan a medias: si dos tiendas compran el producto al mismo precio, " +
+                                      "¿por qué una lo vende mucho más caro? Con ella aparecen casos como un helado que las " +
+                                      "cinco sucursales compran a ₡356 y una vende a ₡1.450 mientras las otras lo dejan en " +
+                                      "₡600. Trae cuatro columnas de diferencia (costo y venta, en colones y en porcentaje) " +
+                                      "y esconde \"Más barata\" y \"Más cara\", que con dos métricas se volverían ambiguas."
+                    },
+                    new EntradaGuia
+                    {
+                        Nombre = "La tabla se desplaza de lado en esa vista",
+                        Descripcion = "Con cinco sucursales son dieciocho columnas, así que la tabla deja de achicarlo todo " +
+                                      "para que entre y se mueve en horizontal, como una hoja de Excel. El orden y los " +
+                                      "filtros usan la MAYOR de las dos diferencias: un producto sube al principio de la " +
+                                      "lista si se separa entre sucursales, sin importar si se separa al comprarlo o al " +
+                                      "venderlo. El gráfico de abajo muestra las dos barras por sucursal, costo y venta."
+                    },
+                    new EntradaGuia
+                    {
                         Nombre = "Productos",
                         Descripcion = "\"En 2 o más sucursales\" es lo normal: solo lo que se puede comparar. \"Sólo los que " +
                                       "están en todas\" deja los productos que maneja toda la cadena. \"Todos\" agrega los " +
@@ -456,6 +476,14 @@ namespace AnalizadorVentasExcel.Modelos
                 Objetivo = "¿Estamos comprando lo mismo a precios distintos según la tienda?",
                 Pasos = "⚖️ Comparativa de Precios  •  Comparar por: Precio de costo  •  Diferencia mínima: 10 % o más. " +
                         "Lo que salga es materia de negociación con el proveedor o error de digitación en la caja."
+            },
+            new RecetaGuia
+            {
+                Objetivo = "Compramos al mismo precio, ¿por qué vendemos distinto?",
+                Pasos = "⚖️ Comparativa de Precios  •  Comparar por: Costo y precio de venta  •  Ordenar por: Mayor " +
+                        "diferencia %. Buscá las filas donde la columna \"Dif. costo\" está en cero o casi, y \"Dif. venta\" " +
+                        "es grande: ese producto entra igual a todas las tiendas y alguna lo está vendiendo fuera de línea. " +
+                        "Es la revisión más rentable de las tres, porque no depende del proveedor."
             },
             new RecetaGuia
             {
