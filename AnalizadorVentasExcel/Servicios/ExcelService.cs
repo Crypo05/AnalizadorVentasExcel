@@ -28,7 +28,12 @@ namespace AnalizadorVentasExcel.Servicios
     {
         public ConjuntoDatos Datos { get; init; } = ConjuntoDatos.Vacio;
         public int ArchivosLeidos { get; init; }
-        public List<string> Errores { get; init; } = new();
+
+        /// <summary>Un veredicto por archivo de la carpeta, cargado o no, en el orden de la carpeta.</summary>
+        public List<DiagnosticoArchivo> Diagnosticos { get; init; } = new();
+
+        public bool HayErrores => Diagnosticos.Exists(d => d.Estado == EstadoCarga.NoCargado);
+        public bool HayAvisos => Diagnosticos.Exists(d => d.Estado == EstadoCarga.ConAvisos);
     }
 
     /// <summary>
@@ -46,8 +51,8 @@ namespace AnalizadorVentasExcel.Servicios
         {
             if (archivos.Count == 0) return new ResultadoCarga();
 
-            var errores = new List<string>();
             var porArchivo = new (string sucursal, List<FilaCruda> filas)[archivos.Count];
+            var diagnosticos = new DiagnosticoArchivo[archivos.Count];
             int completados = 0;
 
             await Task.Run(() =>
@@ -62,17 +67,22 @@ namespace AnalizadorVentasExcel.Servicios
                 {
                     string ruta = archivos[i];
                     string sucursal = Path.GetFileNameWithoutExtension(ruta);
+                    var diag = new DiagnosticoArchivo(ruta, sucursal);
                     try
                     {
-                        porArchivo[i] = (sucursal, LeerArchivo(ruta, modo));
+                        var filas = LeerArchivo(ruta, modo, diag);
+                        porArchivo[i] = (sucursal, filas);
                     }
                     catch (Exception ex)
                     {
+                        // La excepción cruda ("Invalid file signature.") no le dice nada al
+                        // usuario: el clasificador la traduce a qué pasó y qué hacer.
                         porArchivo[i] = (sucursal, new List<FilaCruda>());
-                        lock (errores) errores.Add($"{Path.GetFileName(ruta)}: {ex.Message}");
+                        diag = DiagnosticoCarga.Clasificar(ex, ruta, sucursal);
                     }
                     finally
                     {
+                        diagnosticos[i] = diag;
                         int hechos = Interlocked.Increment(ref completados);
                         progreso?.Report($"Procesando {hechos}/{archivos.Count} archivos...");
                     }
@@ -84,11 +94,14 @@ namespace AnalizadorVentasExcel.Servicios
 
             var datos = await Task.Run(() => Consolidar(porArchivo), ct).ConfigureAwait(false);
 
+            var lista = diagnosticos.ToList();
+            DiagnosticoCarga.MarcarDuplicadas(lista);
+
             return new ResultadoCarga
             {
                 Datos = datos,
-                ArchivosLeidos = porArchivo.Count(p => p.filas is { Count: > 0 }),
-                Errores = errores
+                ArchivosLeidos = lista.Count(d => d.Cargado),
+                Diagnosticos = lista
             };
         }
 
@@ -152,7 +165,27 @@ namespace AnalizadorVentasExcel.Servicios
         // ==========================================
         // Lectura de un archivo
         // ==========================================
-        private static List<FilaCruda> LeerArchivo(string ruta, string? modo)
+        /// <summary>Posición de cada columna conocida en una fila candidata a encabezado (-1 si no está).</summary>
+        private struct Columnas
+        {
+            public int Fecha, Codigo, Desc, Prov, Fam, Total, Util;
+
+            /// <summary>Las dos obligatorias: sin total no hay venta, sin familia no hay agrupación.</summary>
+            public bool Completo => Total != -1 && Fam != -1;
+
+            public int Reconocidas =>
+                (Fecha != -1 ? 1 : 0) + (Codigo != -1 ? 1 : 0) + (Desc != -1 ? 1 : 0) + (Prov != -1 ? 1 : 0) +
+                (Fam != -1 ? 1 : 0) + (Total != -1 ? 1 : 0) + (Util != -1 ? 1 : 0);
+
+            public static Columnas Vacias => new() { Fecha = -1, Codigo = -1, Desc = -1, Prov = -1, Fam = -1, Total = -1, Util = -1 };
+        }
+
+        /// <summary>
+        /// Lee un libro y deja en <paramref name="diag"/> el veredicto: qué encabezado
+        /// encontró (o a qué se parecía lo que había), en qué hoja, y cuántas filas descartó
+        /// y por qué. Antes, un archivo sin encabezado devolvía la lista vacía y nada más.
+        /// </summary>
+        private static List<FilaCruda> LeerArchivo(string ruta, string? modo, DiagnosticoArchivo diag)
         {
             var lista = new List<FilaCruda>(4096);
 
@@ -160,100 +193,226 @@ namespace AnalizadorVentasExcel.Servicios
                                               bufferSize: 1 << 16, FileOptions.SequentialScan);
             using var reader = ExcelReaderFactory.CreateReader(stream);
 
-            // Sólo la primera hoja, igual que antes.
-            if (!reader.Read()) return lista;
+            // --- Encabezado: en la primera hoja y, si no está, en las siguientes ---
+            var col = Columnas.Vacias;
+            bool encontrado = false;
+            int hojaUsada = 0;
+            string nombreHoja = string.Empty;
 
-            int colFecha = -1, colCodigo = -1, colDesc = -1, colProv = -1, colFam = -1, colTotal = -1, colUtil = -1;
-            bool encabezadoEncontrado = false;
-            int filasInspeccionadas = 0;
+            // Lo que más se pareció a un encabezado, para poder decir qué le faltaba.
+            int mejorPuntaje = 0, mejorFila = 0;
+            string mejorHoja = string.Empty;
+            List<string>? mejorReconocidas = null;
+            Columnas mejorCol = Columnas.Vacias;
+            bool pareceDePrecios = false;
+            bool algunaFila = false;
 
-            // El Read() de arriba ya posicionó la primera fila: hay que evaluarla también.
+            int indiceHoja = 0;
             do
             {
-                if (EsFilaVacia(reader)) continue;
-                if (++filasInspeccionadas > 20) break;
+                int filasInspeccionadas = 0, numeroFila = 0;
+                while (reader.Read())
+                {
+                    numeroFila++;
+                    if (EsFilaVacia(reader)) continue;
+                    algunaFila = true;
+                    if (++filasInspeccionadas > 20) break;
 
-                DetectarEncabezado(reader, ref colFecha, ref colCodigo, ref colDesc,
-                                   ref colProv, ref colFam, ref colTotal, ref colUtil);
+                    // La firma del otro sistema se mira ANTES de aceptar el encabezado, por
+                    // simetría con el lector de precios: ninguna lista de precios trae «Año
+                    // mes» ni «Familia», así que la comprobación es segura.
+                    if (PareceEncabezadoPrecios(TextosDeFila(reader))) { pareceDePrecios = true; break; }
 
-                if (colTotal != -1 && colFam != -1) { encabezadoEncontrado = true; break; }
-            } while (reader.Read());
+                    var candidata = DetectarEncabezado(reader, out var reconocidas);
+                    if (candidata.Completo)
+                    {
+                        col = candidata; encontrado = true;
+                        hojaUsada = indiceHoja; nombreHoja = reader.Name ?? string.Empty;
+                        break;
+                    }
 
-            if (!encabezadoEncontrado) return lista;
+                    if (candidata.Reconocidas > mejorPuntaje)
+                    {
+                        mejorPuntaje = candidata.Reconocidas; mejorCol = candidata;
+                        mejorFila = numeroFila; mejorHoja = reader.Name ?? string.Empty;
+                        mejorReconocidas = reconocidas;
+                    }
+                }
+                if (encontrado) break;
+                indiceHoja++;
+            } while (reader.NextResult());
 
-            bool esMinimarket = colCodigo != -1;
+            if (!encontrado)
+            {
+                if (pareceDePrecios)
+                    diag.Registrar(ProblemaCarga.ReporteDelOtroSistema,
+                        "Es un reporte de precios, no de ventas: tiene «Cód. Artículo» y «Precio IVI».",
+                        "Cargalo en ⚖️ Comparativa de Precios, no en esta ventana.");
+                else if (!algunaFila)
+                    diag.Registrar(ProblemaCarga.ArchivoVacio, "El archivo no tiene ninguna fila con datos.");
+                else if (mejorReconocidas == null || mejorReconocidas.Count == 0)
+                    diag.Registrar(ProblemaCarga.SinEncabezado,
+                        "En las primeras 20 filas no hay nada que parezca un encabezado de ventas " +
+                        "(se buscan «Año mes», «Artículo», «Familia», «Total», «% Utilidad»).");
+                else
+                {
+                    var faltan = new List<string>();
+                    if (mejorCol.Total == -1) faltan.Add("«Total»");
+                    if (mejorCol.Fam == -1) faltan.Add("«Familia»");
+                    string donde = indiceHoja > 1 && mejorHoja.Length > 0 ? $" de la hoja «{mejorHoja}»" : string.Empty;
+                    diag.Registrar(ProblemaCarga.SinEncabezado,
+                        $"No hay un encabezado completo en las primeras 20 filas. La fila {mejorFila}{donde} se parece: " +
+                        $"tiene {string.Join(", ", mejorReconocidas.Select(r => $"«{r}»"))}, pero falta {string.Join(" y ", faltan)}.");
+                }
+                return lista;
+            }
+
+            if (hojaUsada > 0)
+                diag.Registrar(ProblemaCarga.HojaEquivocada,
+                    $"Los datos estaban en la hoja «{nombreHoja}», no en la primera. Se usó esa.");
+
+            bool esMinimarket = col.Codigo != -1;
             if (modo != null && modo.Contains("Minimarket")) esMinimarket = true;
             else if (modo != null && modo.Contains("Souvenir")) esMinimarket = false;
+
+            // Columnas opcionales: se carga igual, pero conviene saber qué se pierde.
+            if (col.Fecha == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta la columna «Año mes»: sin periodo no se puede cargar ninguna fila.");
+            if (col.Util == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto, "Falta «% Utilidad»: todo se carga con utilidad 0.");
+            if (col.Prov == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto, "Falta «Proveedor»: todo queda como «General».");
+            if (esMinimarket && col.Desc == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta «Artículo desc.»: los productos quedan como «Sin Nombre».");
 
             string ultPeriodo = string.Empty, ultProv = "General", ultFam = "General";
 
             // Deduplicación local: el mismo texto aparece miles de veces por archivo.
             var pool = new Dictionary<string, string>(1024, StringComparer.Ordinal);
 
+            // Por qué se descarta cada fila que se descarta. Las filas sin clave y sin importe
+            // son la estructura de la tabla dinámica (títulos de grupo) y no se cuentan.
+            int sinClave = 0, sinImporte = 0, sinPeriodo = 0, totalesAnuales = 0;
+
             while (reader.Read())
             {
                 if (EsFilaVacia(reader)) continue;
 
                 string s;
-                if (colFecha != -1 && (s = Texto(reader, colFecha)).Length != 0)
+                if (col.Fecha != -1 && (s = Texto(reader, col.Fecha)).Length != 0)
                     ultPeriodo = Interno(pool, s);
 
-                if (colProv != -1 && (s = Texto(reader, colProv)).Length != 0)
+                if (col.Prov != -1 && (s = Texto(reader, col.Prov)).Length != 0)
                 {
                     if (s.IndexOf("total", StringComparison.OrdinalIgnoreCase) < 0)
                         ultProv = Interno(pool, s);
                 }
 
-                if (colFam != -1 && (s = Texto(reader, colFam)).Length != 0)
+                if (col.Fam != -1 && (s = Texto(reader, col.Fam)).Length != 0)
                     ultFam = Interno(pool, s);
 
-                if (esMinimarket && colCodigo != -1 && Texto(reader, colCodigo).Length == 0) continue;
-                if (!esMinimarket && colFam != -1 && Texto(reader, colFam).Length == 0) continue;
+                bool tieneImporte = LeerDecimal(reader, col.Total, out decimal total) && total != 0m;
+                bool tieneClave = esMinimarket
+                    ? col.Codigo == -1 || Texto(reader, col.Codigo).Length != 0
+                    : col.Fam == -1 || Texto(reader, col.Fam).Length != 0;
 
-                if (!LeerDecimal(reader, colTotal, out decimal total) || total == 0m) continue;
+                if (!tieneClave) { if (tieneImporte) sinClave++; continue; }
+                if (!tieneImporte) { sinImporte++; continue; }
 
                 decimal utilidad = 0m;
-                if (colUtil != -1) LeerDecimal(reader, colUtil, out utilidad);
+                if (col.Util != -1) LeerDecimal(reader, col.Util, out utilidad);
 
                 string nombreReal = "Sin Nombre";
                 if (esMinimarket)
                 {
-                    if (colDesc != -1 && (s = Texto(reader, colDesc)).Length != 0)
+                    if (col.Desc != -1 && (s = Texto(reader, col.Desc)).Length != 0)
                         nombreReal = Interno(pool, s);
                 }
                 else nombreReal = ultFam;
 
-                if (ultPeriodo.Length == 0) continue;
-                if (ultPeriodo.IndexOf("año", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (ultPeriodo.Length == 0) { sinPeriodo++; continue; }
+                if (ultPeriodo.IndexOf("año", StringComparison.OrdinalIgnoreCase) >= 0) { totalesAnuales++; continue; }
 
-                string codigo = colCodigo != -1 ? Interno(pool, Texto(reader, colCodigo)) : string.Empty;
+                string codigo = col.Codigo != -1 ? Interno(pool, Texto(reader, col.Codigo)) : string.Empty;
                 lista.Add(new FilaCruda(ultPeriodo, codigo, nombreReal, ultProv, ultFam, total, utilidad));
             }
 
+            diag.FilasLeidas = lista.Count;
+            AnotarDescartes(diag, lista.Count, esMinimarket, sinClave, sinImporte, sinPeriodo, totalesAnuales);
             return lista;
         }
 
-        private static void DetectarEncabezado(IExcelDataReader reader,
-            ref int colFecha, ref int colCodigo, ref int colDesc,
-            ref int colProv, ref int colFam, ref int colTotal, ref int colUtil)
+        /// <summary>
+        /// Convierte los contadores en una frase. Los subtotales y totales anuales son parte
+        /// del formato y sólo se mencionan en el detalle. Las filas que parecían datos pero
+        /// se descartaron (sin importe, sin periodo) marcan el archivo con aviso únicamente
+        /// si pasan del 5 %: en una tabla dinámica de 80.000 filas siempre hay unas decenas
+        /// de productos con venta cero, y avisar por eso en cada carga enseñaría al usuario
+        /// a ignorar el aviso.
+        /// </summary>
+        private static void AnotarDescartes(DiagnosticoArchivo diag, int cargadas, bool esMinimarket,
+                                            int sinClave, int sinImporte, int sinPeriodo, int totalesAnuales)
         {
-            // Se reinician en cada fila candidata: el encabezado real debe traer todo junto.
-            colFecha = -1; colCodigo = -1; colDesc = -1; colProv = -1; colFam = -1; colTotal = -1; colUtil = -1;
+            var f = ResumenDinamico.FormatoCR;
+            var partes = new List<string>();
+            if (sinImporte > 0) partes.Add($"{sinImporte.ToString("N0", f)} sin importe (Total en 0)");
+            if (sinPeriodo > 0) partes.Add($"{sinPeriodo.ToString("N0", f)} sin periodo");
+            if (sinClave > 0) partes.Add($"{sinClave.ToString("N0", f)} {(esMinimarket ? "sin código" : "sin familia")} (subtotales)");
+            if (totalesAnuales > 0) partes.Add($"{totalesAnuales.ToString("N0", f)} totales anuales");
+
+            if (cargadas == 0)
+            {
+                diag.Registrar(partes.Count == 0 ? ProblemaCarga.ArchivoVacio : ProblemaCarga.SinFilasUtiles,
+                    partes.Count == 0
+                        ? "El encabezado está, pero debajo no hay ninguna fila con datos."
+                        : $"El encabezado está bien pero ninguna fila sirvió: {string.Join(", ", partes)}.");
+                return;
+            }
+
+            if (partes.Count == 0) return;
+
+            string resumen = $"{cargadas.ToString("N0", f)} filas cargadas · {string.Join(" · ", partes)}.";
+            if (SuperaUmbral(sinImporte + sinPeriodo, cargadas)) diag.Registrar(ProblemaCarga.FilasDescartadas, resumen);
+            else diag.Detalles.Add(resumen);
+        }
+
+        /// <summary>Más del 5 % de las filas con pinta de datos se descartó.</summary>
+        internal static bool SuperaUmbral(int descartadas, int cargadas)
+            => descartadas > 0 && descartadas * 20L > (long)(descartadas + cargadas);
+
+        /// <summary>
+        /// Reconoce las columnas de una fila. Devuelve también los textos originales de las
+        /// que reconoció, para poder decirle al usuario "tiene «Artículo» y «Total» pero
+        /// falta «Familia»" cuando ninguna fila llega a encabezado completo.
+        /// </summary>
+        private static Columnas DetectarEncabezado(IExcelDataReader reader, out List<string> reconocidas)
+        {
+            var col = Columnas.Vacias;
+            reconocidas = new List<string>();
 
             for (int c = 0; c < reader.FieldCount; c++)
             {
-                string val = Texto(reader, c);
-                if (val.Length == 0) continue;
-                val = val.ToLowerInvariant().Trim();
+                string original = Texto(reader, c).Trim();
+                if (original.Length == 0) continue;
+                // Sin tildes ni mayúsculas, igual que el lector de precios: "AÑO MES" y
+                // "Ano mes" tienen que reconocerse igual que "Año mes".
+                string val = Normalizar(original);
 
-                if (val.Contains("año") || val == "mes") colFecha = c;
-                else if (val == "artículo" || val == "articulo") colCodigo = c;
-                else if (val.Contains("desc") || val.Contains("nombre")) colDesc = c;
-                else if (val.Contains("proveedor")) colProv = c;
-                else if (val.Contains("familia")) colFam = c;
-                else if (val == "total" || val == "total venta") colTotal = c;
-                else if (val.Contains("utilidad") || val.Contains("%")) colUtil = c;
+                bool hit = true;
+                if (val.Contains("ano", StringComparison.Ordinal) || val == "mes") col.Fecha = c;
+                else if (val == "articulo") col.Codigo = c;
+                else if (val.Contains("desc") || val.Contains("nombre")) col.Desc = c;
+                else if (val.Contains("proveedor")) col.Prov = c;
+                else if (val.Contains("familia")) col.Fam = c;
+                else if (val == "total" || val == "total venta") col.Total = c;
+                else if (val.Contains("utilidad") || val.Contains("%")) col.Util = c;
+                else hit = false;
+
+                if (hit) reconocidas.Add(original);
             }
+            return col;
         }
 
         private static string Interno(Dictionary<string, string> pool, string s)

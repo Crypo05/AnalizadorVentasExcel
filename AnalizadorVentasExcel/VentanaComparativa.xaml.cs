@@ -34,6 +34,9 @@ namespace AnalizadorVentasExcel
         private bool _ocupado;
         private bool _cargandoFiltros;
 
+        /// <summary>Diagnóstico de la última carga, para reabrir la ventana de detalle sin recargar.</summary>
+        private List<DiagnosticoArchivo> _ultimoDiagnostico = new();
+
         private readonly List<OpcionFiltro> _opSucursales = new();
 
         /// <summary>Columnas de precio insertadas en la tabla, una por sucursal comparada.</summary>
@@ -114,6 +117,8 @@ namespace AnalizadorVentasExcel
             _motor = null;
             _temporizador.Stop();
             LimpiarVista();
+            _ultimoDiagnostico = new();
+            BtnDiagnostico.IsEnabled = false;
 
             var cronometro = Stopwatch.StartNew();
             EstablecerOcupado(true, $"Leyendo {archivos.Length} archivos...");
@@ -124,35 +129,46 @@ namespace AnalizadorVentasExcel
                 var resultado = await new PreciosExcelService().CargarCarpetaAsync(archivos, progreso);
                 cronometro.Stop();
 
+                _ultimoDiagnostico = resultado.Diagnosticos;
+                BtnDiagnostico.IsEnabled = _ultimoDiagnostico.Count > 0;
+
                 if (resultado.Datos.Count == 0)
                 {
-                    Estado("Ningún archivo tenía formato de lista de precios.", Brushes.Red);
-                    MessageBox.Show(
-                        "No se encontró el encabezado esperado en ninguno de los archivos.\n\n" +
-                        "La comparativa necesita los reportes de precios, con las columnas " +
-                        "\"Cód. Artículo\", \"Descripción\", \"Precio costo\", \"Imp. ventas\", " +
-                        "\"Porc. utilidad\" y \"Precio IVI\".\n\n" +
-                        "Los archivos de ventas se cargan en la ventana principal, no acá.",
-                        "Formato no reconocido");
+                    Estado("Ningún archivo se pudo cargar — ver detalle.", Brushes.Red);
+                    MostrarDiagnosticoAlTerminar();
                     return;
                 }
 
                 _motor = new ComparativaService(resultado.Datos);
 
-                Estado($"Carga OK: {resultado.ArchivosLeidos} sucursales, " +
-                       $"{resultado.Datos.Count.ToString("N0", ResumenDinamico.FormatoCR)} precios en " +
-                       $"{cronometro.Elapsed.TotalSeconds:N1} s.", Brushes.Green);
+                int noCargados = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.NoCargado);
+                int conAvisos = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.ConAvisos);
+
+                if (resultado.HayErrores)
+                {
+                    Estado($"Carga OK: {resultado.ArchivosLeidos} de {resultado.Diagnosticos.Count} archivos, " +
+                           $"{resultado.Datos.Count.ToString("N0", ResumenDinamico.FormatoCR)} precios en " +
+                           $"{cronometro.Elapsed.TotalSeconds:N1} s — {noCargados} no cargados, ver detalle.",
+                           new SolidColorBrush(Color.FromRgb(0xB9, 0x77, 0x0E)));
+                }
+                else if (resultado.HayAvisos)
+                {
+                    Estado($"Carga OK: {resultado.ArchivosLeidos} de {resultado.Diagnosticos.Count} archivos, " +
+                           $"{resultado.Datos.Count.ToString("N0", ResumenDinamico.FormatoCR)} precios en " +
+                           $"{cronometro.Elapsed.TotalSeconds:N1} s — {conAvisos} con avisos, ver detalle.",
+                           new SolidColorBrush(Color.FromRgb(0xB9, 0x77, 0x0E)));
+                }
+                else
+                {
+                    Estado($"Carga OK: {resultado.ArchivosLeidos} sucursales, " +
+                           $"{resultado.Datos.Count.ToString("N0", ResumenDinamico.FormatoCR)} precios en " +
+                           $"{cronometro.Elapsed.TotalSeconds:N1} s.", Brushes.Green);
+                }
 
                 InicializarFiltros(resultado.Datos);
                 Comparar();
 
-                if (resultado.Errores.Count > 0)
-                    MessageBox.Show("Archivos con problemas:\n" + string.Join("\n", resultado.Errores), "Aviso");
-
-                if (resultado.Descartados.Count > 0)
-                    MessageBox.Show(
-                        "Estos archivos se ignoraron porque no tienen formato de lista de precios:\n" +
-                        string.Join("\n", resultado.Descartados), "Archivos ignorados");
+                if (resultado.HayErrores) MostrarDiagnosticoAlTerminar();
 
                 if (resultado.ArchivosLeidos < 2)
                     MessageBox.Show(
@@ -181,9 +197,26 @@ namespace AnalizadorVentasExcel
             _ocupado = ocupado;
             BarraProgreso.Visibility = ocupado ? Visibility.Visible : Visibility.Collapsed;
             BtnCargarPrecios.IsEnabled = !ocupado;
+            BtnDiagnostico.IsEnabled = !ocupado && _ultimoDiagnostico.Count > 0;
             Cursor = ocupado ? System.Windows.Input.Cursors.Wait : null;
             if (mensaje != null) Estado(mensaje, Brushes.DimGray);
         }
+
+        private void MostrarDiagnostico()
+        {
+            if (_ultimoDiagnostico.Count == 0) return;
+            new VentanaDiagnostico(_ultimoDiagnostico) { Owner = this }.ShowDialog();
+        }
+
+        /// <summary>
+        /// La ventana de diagnóstico es modal: si se abriera dentro del handler de carga, la
+        /// barra de progreso y el cursor de espera quedarían activos detrás hasta cerrarla.
+        /// Se difiere al siguiente ciclo del Dispatcher, cuando el finally ya restauró todo.
+        /// </summary>
+        private void MostrarDiagnosticoAlTerminar()
+            => Dispatcher.BeginInvoke(new Action(MostrarDiagnostico), DispatcherPriority.Background);
+
+        private void BtnDiagnostico_Click(object sender, RoutedEventArgs e) => MostrarDiagnostico();
 
         private void LimpiarVista()
         {

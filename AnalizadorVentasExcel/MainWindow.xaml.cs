@@ -52,6 +52,9 @@ namespace AnalizadorVentasExcel
 
         private List<AnalisisService.ProductoExplorado> _productosExplorados = new();
 
+        /// <summary>Diagnóstico de la última carga, para reabrir la ventana de detalle sin recargar.</summary>
+        private List<DiagnosticoArchivo> _ultimoDiagnostico = new();
+
         /// <summary>Ventana del sistema de comparativa de precios; se reutiliza si sigue abierta.</summary>
         private VentanaComparativa? _ventanaComparativa;
 
@@ -146,6 +149,8 @@ namespace AnalizadorVentasExcel
             _motor = null;
             _modoExploracion = false;
             _productosExplorados = new List<AnalisisService.ProductoExplorado>();
+            _ultimoDiagnostico = new();
+            BtnDiagnostico.IsEnabled = false;
             _temporizadorFiltros.Stop();
 
             var cronometro = Stopwatch.StartNew();
@@ -160,28 +165,56 @@ namespace AnalizadorVentasExcel
                 var resultado = await new ExcelService().CargarCarpetaAsync(archivos, modo, progreso);
                 cronometro.Stop();
 
+                _ultimoDiagnostico = resultado.Diagnosticos;
+                BtnDiagnostico.IsEnabled = _ultimoDiagnostico.Count > 0;
+
                 if (resultado.Datos.Count == 0)
                 {
                     _motor = null;
-                    TxtEstadoArchivo.Text = "No se encontraron datos.";
+                    TxtEstadoArchivo.Text = "Ningún archivo se pudo cargar — ver detalle.";
                     TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Red;
                     LimpiarVista();
+                    MostrarDiagnosticoAlTerminar();
                 }
                 else
                 {
                     _motor = new AnalisisService(resultado.Datos);
-                    TxtEstadoArchivo.Text =
-                        $"Carga OK: {resultado.ArchivosLeidos} archivos, " +
-                        $"{resultado.Datos.Count.ToString("N0", _culturaCR)} filas en " +
-                        $"{cronometro.Elapsed.TotalSeconds:N1} s.";
-                    TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Green;
+
+                    int noCargados = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.NoCargado);
+                    int conAvisos = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.ConAvisos);
+
+                    if (resultado.HayErrores)
+                    {
+                        TxtEstadoArchivo.Text =
+                            $"Carga OK: {resultado.ArchivosLeidos} de {resultado.Diagnosticos.Count} archivos, " +
+                            $"{resultado.Datos.Count.ToString("N0", _culturaCR)} filas en " +
+                            $"{cronometro.Elapsed.TotalSeconds:N1} s — {noCargados} no cargados, ver detalle.";
+                        TxtEstadoArchivo.Foreground = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(0xB9, 0x77, 0x0E));
+                    }
+                    else if (resultado.HayAvisos)
+                    {
+                        TxtEstadoArchivo.Text =
+                            $"Carga OK: {resultado.ArchivosLeidos} de {resultado.Diagnosticos.Count} archivos, " +
+                            $"{resultado.Datos.Count.ToString("N0", _culturaCR)} filas en " +
+                            $"{cronometro.Elapsed.TotalSeconds:N1} s — {conAvisos} con avisos, ver detalle.";
+                        TxtEstadoArchivo.Foreground = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(0xB9, 0x77, 0x0E));
+                    }
+                    else
+                    {
+                        TxtEstadoArchivo.Text =
+                            $"Carga OK: {resultado.ArchivosLeidos} archivos, " +
+                            $"{resultado.Datos.Count.ToString("N0", _culturaCR)} filas en " +
+                            $"{cronometro.Elapsed.TotalSeconds:N1} s.";
+                        TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.Green;
+                    }
 
                     InicializarFiltros(resultado.Datos);
                     AplicarFiltros();
-                }
 
-                if (resultado.Errores.Count > 0)
-                    MessageBox.Show("Archivos con problemas:\n" + string.Join("\n", resultado.Errores), "Aviso");
+                    if (resultado.HayErrores) MostrarDiagnosticoAlTerminar();
+                }
             }
             catch (Exception ex)
             {
@@ -201,6 +234,7 @@ namespace AnalizadorVentasExcel
             BarraProgreso.Visibility = ocupado ? Visibility.Visible : Visibility.Collapsed;
             BtnCargarCarpeta.IsEnabled = !ocupado;
             BtnAuditar.IsEnabled = !ocupado;
+            BtnDiagnostico.IsEnabled = ocupado ? false : _ultimoDiagnostico.Count > 0;
             Cursor = ocupado ? System.Windows.Input.Cursors.Wait : null;
             if (mensaje != null)
             {
@@ -208,6 +242,22 @@ namespace AnalizadorVentasExcel
                 TxtEstadoArchivo.Foreground = System.Windows.Media.Brushes.DimGray;
             }
         }
+
+        private void MostrarDiagnostico()
+        {
+            if (_ultimoDiagnostico.Count == 0) return;
+            new VentanaDiagnostico(_ultimoDiagnostico) { Owner = this }.ShowDialog();
+        }
+
+        /// <summary>
+        /// La ventana de diagnóstico es modal: si se abriera dentro del handler de carga, la
+        /// barra de progreso y el cursor de espera quedarían activos detrás hasta cerrarla.
+        /// Se difiere al siguiente ciclo del Dispatcher, cuando el finally ya restauró todo.
+        /// </summary>
+        private void MostrarDiagnosticoAlTerminar()
+            => Dispatcher.BeginInvoke(new Action(MostrarDiagnostico), DispatcherPriority.Background);
+
+        private void BtnDiagnostico_Click(object sender, RoutedEventArgs e) => MostrarDiagnostico();
 
         private void LimpiarVista()
         {

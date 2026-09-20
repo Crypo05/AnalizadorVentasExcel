@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using ExcelDataReader;
@@ -69,6 +70,53 @@ namespace AnalizadorVentasExcel.Servicios
             string l = t.Replace("%", "").Replace("$", "").Replace("₡", "").Trim();
             if (decimal.TryParse(l, NumberStyles.Any, CultureInfo.InvariantCulture, out r)) return true;
             return decimal.TryParse(l, NumberStyles.Any, CultureInfo.GetCultureInfo("es-CR"), out r);
+        }
+
+        /// <summary>
+        /// Textos normalizados de todas las celdas con contenido de la fila actual. Es lo que
+        /// miran las firmas de formato y lo que se muestra al usuario cuando el encabezado
+        /// no aparece ("la fila 3 se parece: tiene «Artículo», «Total»...").
+        /// </summary>
+        internal static List<string> TextosDeFila(IExcelDataReader reader)
+        {
+            var lista = new List<string>();
+            for (int c = 0; c < reader.FieldCount; c++)
+            {
+                string t = Texto(reader, c).Trim();
+                if (t.Length > 0) lista.Add(t);
+            }
+            return lista;
+        }
+
+        /// <summary>
+        /// Firma del reporte de precios (Cód. Artículo + Precio IVI o Precio costo). Se usa
+        /// desde el lector de VENTAS para avisar que el archivo es del otro sistema, que es
+        /// el error más común: los dos leen "cualquier Excel de la carpeta".
+        /// </summary>
+        internal static bool PareceEncabezadoPrecios(IReadOnlyList<string> celdas)
+        {
+            bool codigo = false, precio = false;
+            foreach (string celda in celdas)
+            {
+                string n = Normalizar(celda);
+                if (n.Contains("cod", StringComparison.Ordinal) && n.Contains("art", StringComparison.Ordinal)) codigo = true;
+                if (n.Contains("ivi", StringComparison.Ordinal) || n.Contains("precio costo", StringComparison.Ordinal)) precio = true;
+            }
+            return codigo && precio;
+        }
+
+        /// <summary>Firma del reporte de ventas (Año mes + Total + Familia), para el lector de precios.</summary>
+        internal static bool PareceEncabezadoVentas(IReadOnlyList<string> celdas)
+        {
+            bool fecha = false, total = false, familia = false;
+            foreach (string celda in celdas)
+            {
+                string n = Normalizar(celda);
+                if (n.Contains("ano", StringComparison.Ordinal) || n == "mes") fecha = true;
+                if (n == "total" || n == "total venta") total = true;
+                if (n.Contains("familia", StringComparison.Ordinal)) familia = true;
+            }
+            return total && familia && fecha;
         }
 
         /// <summary>

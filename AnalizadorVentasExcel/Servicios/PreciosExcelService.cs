@@ -28,10 +28,12 @@ namespace AnalizadorVentasExcel.Servicios
     {
         public ConjuntoPrecios Datos { get; init; } = ConjuntoPrecios.Vacio;
         public int ArchivosLeidos { get; init; }
-        public List<string> Errores { get; init; } = new();
 
-        /// <summary>Archivos que se leyeron bien pero no traían el encabezado de precios.</summary>
-        public List<string> Descartados { get; init; } = new();
+        /// <summary>Un veredicto por archivo de la carpeta, cargado o no, en el orden de la carpeta.</summary>
+        public List<DiagnosticoArchivo> Diagnosticos { get; init; } = new();
+
+        public bool HayErrores => Diagnosticos.Exists(d => d.Estado == EstadoCarga.NoCargado);
+        public bool HayAvisos => Diagnosticos.Exists(d => d.Estado == EstadoCarga.ConAvisos);
     }
 
     /// <summary>
@@ -50,9 +52,8 @@ namespace AnalizadorVentasExcel.Servicios
         {
             if (archivos.Count == 0) return new ResultadoCargaPrecios();
 
-            var errores = new List<string>();
-            var descartados = new List<string>();
             var porArchivo = new (string sucursal, List<FilaPrecio> filas)[archivos.Count];
+            var diagnosticos = new DiagnosticoArchivo[archivos.Count];
             int completados = 0;
 
             await Task.Run(() =>
@@ -67,20 +68,21 @@ namespace AnalizadorVentasExcel.Servicios
                 {
                     string ruta = archivos[i];
                     string sucursal = NombreSucursal(ruta);
+                    var diag = new DiagnosticoArchivo(ruta, sucursal);
                     try
                     {
-                        var filas = LeerArchivo(ruta);
-                        porArchivo[i] = (sucursal, filas);
-                        if (filas.Count == 0)
-                            lock (descartados) descartados.Add(Path.GetFileName(ruta));
+                        porArchivo[i] = (sucursal, LeerArchivo(ruta, diag));
                     }
                     catch (Exception ex)
                     {
+                        // La excepción cruda no le dice nada al usuario: el clasificador la
+                        // traduce a qué pasó y qué hacer.
                         porArchivo[i] = (sucursal, new List<FilaPrecio>());
-                        lock (errores) errores.Add($"{Path.GetFileName(ruta)}: {ex.Message}");
+                        diag = DiagnosticoCarga.Clasificar(ex, ruta, sucursal);
                     }
                     finally
                     {
+                        diagnosticos[i] = diag;
                         int hechos = Interlocked.Increment(ref completados);
                         progreso?.Report($"Procesando {hechos}/{archivos.Count} archivos...");
                     }
@@ -92,12 +94,14 @@ namespace AnalizadorVentasExcel.Servicios
 
             var datos = await Task.Run(() => Consolidar(porArchivo), ct).ConfigureAwait(false);
 
+            var lista = diagnosticos.ToList();
+            DiagnosticoCarga.MarcarDuplicadas(lista);
+
             return new ResultadoCargaPrecios
             {
                 Datos = datos,
                 ArchivosLeidos = datos.Sucursales.Count,
-                Errores = errores,
-                Descartados = descartados
+                Diagnosticos = lista
             };
         }
 
@@ -179,7 +183,32 @@ namespace AnalizadorVentasExcel.Servicios
         // ==========================================
         // Lectura de un archivo
         // ==========================================
-        private static List<FilaPrecio> LeerArchivo(string ruta)
+
+        /// <summary>Posición de cada columna conocida en una fila candidata a encabezado (-1 si no está).</summary>
+        private struct Columnas
+        {
+            public int Codigo, Desc, Costo, Imp, Util, Precio;
+
+            /// <summary>
+            /// Sin código no hay forma de cruzar el producto entre sucursales, y sin ninguna
+            /// columna numérica no hay nada que comparar.
+            /// </summary>
+            public bool Completo => Codigo != -1 && (Precio != -1 || Costo != -1 || Util != -1);
+
+            public int Reconocidas =>
+                (Codigo != -1 ? 1 : 0) + (Desc != -1 ? 1 : 0) + (Costo != -1 ? 1 : 0) +
+                (Imp != -1 ? 1 : 0) + (Util != -1 ? 1 : 0) + (Precio != -1 ? 1 : 0);
+
+            public static Columnas Vacias => new() { Codigo = -1, Desc = -1, Costo = -1, Imp = -1, Util = -1, Precio = -1 };
+        }
+
+        /// <summary>
+        /// Lee una lista de precios y deja en <paramref name="diag"/> el veredicto: qué
+        /// encabezado encontró (o a qué se parecía lo que había), en qué hoja, y cuántas
+        /// filas descartó y por qué. Antes, un archivo sin encabezado devolvía la lista
+        /// vacía y sólo quedaba el nombre en una lista de "descartados", sin la razón.
+        /// </summary>
+        private static List<FilaPrecio> LeerArchivo(string ruta, DiagnosticoArchivo diag)
         {
             var lista = new List<FilaPrecio>(4096);
 
@@ -187,96 +216,208 @@ namespace AnalizadorVentasExcel.Servicios
                                               bufferSize: 1 << 16, FileOptions.SequentialScan);
             using var reader = ExcelReaderFactory.CreateReader(stream);
 
-            if (!reader.Read()) return lista;
+            // --- Encabezado: en la primera hoja y, si no está, en las siguientes ---
+            var col = Columnas.Vacias;
+            bool encontrado = false;
+            int hojaUsada = 0;
+            string nombreHoja = string.Empty;
 
-            int colCodigo = -1, colDesc = -1, colCosto = -1, colImp = -1, colUtil = -1, colPrecio = -1;
-            bool encabezadoEncontrado = false;
-            int filasInspeccionadas = 0;
+            // Lo que más se pareció a un encabezado, para poder decir qué le faltaba.
+            int mejorPuntaje = 0, mejorFila = 0;
+            string mejorHoja = string.Empty;
+            List<string>? mejorReconocidas = null;
+            Columnas mejorCol = Columnas.Vacias;
+            bool pareceDeVentas = false;
+            bool algunaFila = false;
 
-            // El Read() de arriba ya posicionó la primera fila: hay que evaluarla también.
+            int indiceHoja = 0;
             do
             {
-                if (EsFilaVacia(reader)) continue;
-                if (++filasInspeccionadas > 20) break;
-
-                DetectarEncabezado(reader, ref colCodigo, ref colDesc, ref colCosto,
-                                   ref colImp, ref colUtil, ref colPrecio);
-
-                // Sin código no hay forma de cruzar el producto entre sucursales, y sin
-                // ninguna columna numérica no hay nada que comparar.
-                if (colCodigo != -1 && (colPrecio != -1 || colCosto != -1 || colUtil != -1))
+                int filasInspeccionadas = 0, numeroFila = 0;
+                while (reader.Read())
                 {
-                    encabezadoEncontrado = true;
-                    break;
-                }
-            } while (reader.Read());
+                    numeroFila++;
+                    if (EsFilaVacia(reader)) continue;
+                    algunaFila = true;
+                    if (++filasInspeccionadas > 20) break;
 
-            if (!encabezadoEncontrado) return lista;
+                    // La firma del otro sistema se mira ANTES de aceptar el encabezado: el
+                    // reporte de ventas trae «Artículo» y «% Utilidad», que este detector
+                    // tomaría por código y utilidad, y cargaría la tabla dinámica entera como
+                    // si fueran 4.000 productos.
+                    if (PareceEncabezadoVentas(TextosDeFila(reader))) { pareceDeVentas = true; break; }
+
+                    var candidata = DetectarEncabezado(reader, out var reconocidas);
+                    if (candidata.Completo)
+                    {
+                        col = candidata; encontrado = true;
+                        hojaUsada = indiceHoja; nombreHoja = reader.Name ?? string.Empty;
+                        break;
+                    }
+
+                    if (candidata.Reconocidas > mejorPuntaje)
+                    {
+                        mejorPuntaje = candidata.Reconocidas; mejorCol = candidata;
+                        mejorFila = numeroFila; mejorHoja = reader.Name ?? string.Empty;
+                        mejorReconocidas = reconocidas;
+                    }
+                }
+                if (encontrado) break;
+                indiceHoja++;
+            } while (reader.NextResult());
+
+            if (!encontrado)
+            {
+                if (pareceDeVentas)
+                    diag.Registrar(ProblemaCarga.ReporteDelOtroSistema,
+                        "Es un reporte de ventas, no una lista de precios: tiene «Año mes», «Familia» y «Total».",
+                        "Cargalo en la ventana principal (📂 Seleccionar Carpeta), no en la comparativa.");
+                else if (!algunaFila)
+                    diag.Registrar(ProblemaCarga.ArchivoVacio, "El archivo no tiene ninguna fila con datos.");
+                else if (mejorReconocidas == null || mejorReconocidas.Count == 0)
+                    diag.Registrar(ProblemaCarga.SinEncabezado,
+                        "En las primeras 20 filas no hay nada que parezca un encabezado de precios " +
+                        "(se buscan «Cód. Artículo», «Descripción», «Precio costo», «Porc. utilidad», «Precio IVI»).");
+                else
+                {
+                    var faltan = new List<string>();
+                    if (mejorCol.Codigo == -1) faltan.Add("«Cód. Artículo»");
+                    if (mejorCol.Precio == -1 && mejorCol.Costo == -1 && mejorCol.Util == -1)
+                        faltan.Add("alguna columna de importe («Precio IVI», «Precio costo» o «Porc. utilidad»)");
+                    string donde = indiceHoja > 1 && mejorHoja.Length > 0 ? $" de la hoja «{mejorHoja}»" : string.Empty;
+                    diag.Registrar(ProblemaCarga.SinEncabezado,
+                        $"No hay un encabezado completo en las primeras 20 filas. La fila {mejorFila}{donde} se parece: " +
+                        $"tiene {string.Join(", ", mejorReconocidas.Select(r => $"«{r}»"))}, pero falta {string.Join(" y ", faltan)}.");
+                }
+                return lista;
+            }
+
+            if (hojaUsada > 0)
+                diag.Registrar(ProblemaCarga.HojaEquivocada,
+                    $"Los datos estaban en la hoja «{nombreHoja}», no en la primera. Se usó esa.");
+
+            // Columnas opcionales: se carga igual, pero la comparativa mostrará ceros ahí.
+            if (col.Precio == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta «Precio IVI»: la comparativa por precio de venta va a mostrar ₡0,00 en esta sucursal.");
+            if (col.Costo == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta «Precio costo»: la comparativa por costo va a mostrar ₡0,00 en esta sucursal.");
+            if (col.Util == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta «Porc. utilidad»: la comparativa por utilidad va a mostrar 0 % en esta sucursal.");
+            if (col.Desc == -1)
+                diag.Registrar(ProblemaCarga.EncabezadoIncompleto,
+                    "Falta «Descripción»: los productos quedan como «Sin descripción».");
 
             // Deduplicación local: los mismos textos se repiten miles de veces por archivo.
             var pool = new Dictionary<string, string>(1024, StringComparer.Ordinal);
             var vistos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Por qué se descarta cada fila que se descarta.
+            int sinCodigo = 0, filasDeTotal = 0, repetidos = 0, sinImporte = 0;
+
             while (reader.Read())
             {
                 if (EsFilaVacia(reader)) continue;
 
-                string codigo = Texto(reader, colCodigo).Trim();
-                if (codigo.Length == 0) continue;
+                string codigo = Texto(reader, col.Codigo).Trim();
+                if (codigo.Length == 0) { sinCodigo++; continue; }
 
                 // Un total o subtotal al pie del reporte no es un producto.
-                if (Normalizar(codigo).Contains("total", StringComparison.Ordinal)) continue;
+                if (Normalizar(codigo).Contains("total", StringComparison.Ordinal)) { filasDeTotal++; continue; }
 
                 // El mismo código dos veces en una sucursal dejaría la comparación ambigua;
                 // se conserva la primera aparición, que es la que ve el usuario en el Excel.
-                if (!vistos.Add(codigo)) continue;
+                if (!vistos.Add(codigo)) { repetidos++; continue; }
 
-                string descripcion = colDesc != -1 ? Texto(reader, colDesc).Trim() : string.Empty;
+                string descripcion = col.Desc != -1 ? Texto(reader, col.Desc).Trim() : string.Empty;
                 if (descripcion.Length == 0) descripcion = "Sin descripción";
 
-                LeerDecimal(reader, colCosto, out decimal costo);
-                LeerDecimal(reader, colImp, out decimal impuesto);
-                LeerDecimal(reader, colUtil, out decimal utilidad);
-                LeerDecimal(reader, colPrecio, out decimal precio);
+                LeerDecimal(reader, col.Costo, out decimal costo);
+                LeerDecimal(reader, col.Imp, out decimal impuesto);
+                LeerDecimal(reader, col.Util, out decimal utilidad);
+                LeerDecimal(reader, col.Precio, out decimal precio);
 
                 // Una fila sin ningún importe es un separador del reporte, no un producto.
-                if (costo == 0m && precio == 0m && utilidad == 0m) continue;
+                if (costo == 0m && precio == 0m && utilidad == 0m) { sinImporte++; continue; }
 
                 lista.Add(new FilaPrecio(Interno(pool, codigo), Interno(pool, descripcion),
                                          costo, impuesto, utilidad, precio));
             }
 
+            diag.FilasLeidas = lista.Count;
+            AnotarDescartes(diag, lista.Count, sinCodigo, filasDeTotal, repetidos, sinImporte);
             return lista;
         }
 
         /// <summary>
-        /// El orden de las comprobaciones importa: "Precio IVI - artículo" contiene tanto
-        /// "precio" como "articulo", y "Precio costo" también contiene "precio".
+        /// Convierte los contadores en una frase. Un código repetido siempre es aviso: pierde
+        /// datos en silencio. Los productos sin ningún importe avisan sólo si pasan del 5 %
+        /// (una docena en 2.900 es normal y no vale la pena marcar el archivo por eso). Las
+        /// filas sin código y los totales son parte del formato y sólo van al detalle.
         /// </summary>
-        private static void DetectarEncabezado(IExcelDataReader reader,
-            ref int colCodigo, ref int colDesc, ref int colCosto,
-            ref int colImp, ref int colUtil, ref int colPrecio)
+        private static void AnotarDescartes(DiagnosticoArchivo diag, int cargadas,
+                                            int sinCodigo, int filasDeTotal, int repetidos, int sinImporte)
         {
-            // Se reinician en cada fila candidata: el encabezado real debe traer todo junto.
-            colCodigo = -1; colDesc = -1; colCosto = -1; colImp = -1; colUtil = -1; colPrecio = -1;
+            var f = ResumenDinamico.FormatoCR;
+            var partes = new List<string>();
+            if (sinImporte > 0) partes.Add($"{sinImporte.ToString("N0", f)} sin ningún importe (costo, precio y utilidad en 0)");
+            if (repetidos > 0) partes.Add($"{repetidos.ToString("N0", f)} con código repetido (se tomó la primera aparición)");
+            if (sinCodigo > 0) partes.Add($"{sinCodigo.ToString("N0", f)} sin código");
+            if (filasDeTotal > 0) partes.Add($"{filasDeTotal.ToString("N0", f)} filas de total");
+
+            if (cargadas == 0)
+            {
+                diag.Registrar(partes.Count == 0 ? ProblemaCarga.ArchivoVacio : ProblemaCarga.SinFilasUtiles,
+                    partes.Count == 0
+                        ? "El encabezado está, pero debajo no hay ninguna fila con datos."
+                        : $"El encabezado está bien pero ninguna fila sirvió: {string.Join(", ", partes)}.");
+                return;
+            }
+
+            if (partes.Count == 0) return;
+
+            string resumen = $"{cargadas.ToString("N0", f)} productos cargados · {string.Join(" · ", partes)}.";
+            if (repetidos > 0 || ExcelService.SuperaUmbral(sinImporte, cargadas))
+                diag.Registrar(ProblemaCarga.FilasDescartadas, resumen);
+            else diag.Detalles.Add(resumen);
+        }
+
+        /// <summary>
+        /// Reconoce las columnas de una fila. El orden de las comprobaciones importa:
+        /// "Precio IVI - artículo" contiene tanto "precio" como "articulo", y "Precio costo"
+        /// también contiene "precio". Devuelve además los textos originales de las columnas
+        /// reconocidas, para decirle al usuario qué encontró cuando falta el encabezado.
+        /// </summary>
+        private static Columnas DetectarEncabezado(IExcelDataReader reader, out List<string> reconocidas)
+        {
+            var col = Columnas.Vacias;
+            reconocidas = new List<string>();
 
             for (int c = 0; c < reader.FieldCount; c++)
             {
-                string val = Normalizar(Texto(reader, c));
-                if (val.Length == 0) continue;
+                string original = Texto(reader, c).Trim();
+                if (original.Length == 0) continue;
+                string val = Normalizar(original);
 
+                bool hit = true;
                 if (val.Contains("ivi", StringComparison.Ordinal) ||
                     val.Contains("precio venta", StringComparison.Ordinal) ||
-                    val.Contains("precio de venta", StringComparison.Ordinal)) colPrecio = c;
-                else if (val.Contains("costo", StringComparison.Ordinal)) colCosto = c;
-                else if (val.Contains("utilidad", StringComparison.Ordinal)) colUtil = c;
-                else if (val.Contains("imp", StringComparison.Ordinal)) colImp = c;
+                    val.Contains("precio de venta", StringComparison.Ordinal)) col.Precio = c;
+                else if (val.Contains("costo", StringComparison.Ordinal)) col.Costo = c;
+                else if (val.Contains("utilidad", StringComparison.Ordinal)) col.Util = c;
+                else if (val.Contains("imp", StringComparison.Ordinal)) col.Imp = c;
                 else if (val.Contains("descrip", StringComparison.Ordinal) ||
-                         val.Contains("nombre", StringComparison.Ordinal)) colDesc = c;
+                         val.Contains("nombre", StringComparison.Ordinal)) col.Desc = c;
                 else if (val.Contains("cod", StringComparison.Ordinal) ||
                          val.Contains("barra", StringComparison.Ordinal) ||
-                         val == "articulo") colCodigo = c;
+                         val == "articulo") col.Codigo = c;
+                else hit = false;
+
+                if (hit) reconocidas.Add(original);
             }
+            return col;
         }
 
         private static string Interno(Dictionary<string, string> pool, string s)

@@ -59,6 +59,10 @@
                                      Visibility="Collapsed" Foreground="#8E44AD" Background="Transparent" BorderThickness="0"/>
                         <TextBlock x:Name="TxtEstadoArchivo" Text="Sin listas cargadas" FontSize="10" Margin="0,2,0,0"
                                    Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                        <Button x:Name="BtnDiagnostico" Content="🩺 Detalle de la carga" Height="24" Margin="0,4,0,0"
+                                Click="BtnDiagnostico_Click" IsEnabled="False" FontSize="11" Cursor="Hand"
+                                Background="#ECF0F1" Foreground="#2C3E50" BorderBrush="#BDC3C7"
+                                ToolTip="Qué pasó con cada archivo de la carpeta: cuáles cargaron, cuáles no y por qué"/>
                     </StackPanel>
                 </GroupBox>
 
