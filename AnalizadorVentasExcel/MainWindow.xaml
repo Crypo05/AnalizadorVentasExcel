@@ -50,6 +50,10 @@
                         <Button x:Name="BtnCargarCarpeta" Content="📂 Seleccionar Carpeta" Height="30" Click="BtnCargarCarpeta_Click" Background="#2980B9" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
                         <ProgressBar x:Name="BarraProgreso" Height="4" Margin="0,4,0,0" IsIndeterminate="True" Visibility="Collapsed" Foreground="#2980B9" Background="Transparent" BorderThickness="0"/>
                         <TextBlock x:Name="TxtEstadoArchivo" Text="Listo" FontSize="10" Margin="0,2,0,0" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                        <Button x:Name="BtnDiagnostico" Content="🩺 Detalle de la carga" Height="24" Margin="0,4,0,0"
+                                Click="BtnDiagnostico_Click" IsEnabled="False" FontSize="11" Cursor="Hand"
+                                Background="#ECF0F1" Foreground="#2C3E50" BorderBrush="#BDC3C7"
+                                ToolTip="Qué pasó con cada archivo de la carpeta: cuáles cargaron, cuáles no y por qué"/>
                         <GroupBox Header="Herramientas Avanzadas" Margin="0,0,0,10" BorderBrush="#BDC3C7">
                             <StackPanel Margin="5">
                                 <Button x:Name="BtnAuditar" Content="🔍 Auditar Anomalías" Height="30"

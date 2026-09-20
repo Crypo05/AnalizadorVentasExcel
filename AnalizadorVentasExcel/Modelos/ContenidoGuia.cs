@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 
 namespace AnalizadorVentasExcel.Modelos
 {
@@ -401,6 +402,24 @@ namespace AnalizadorVentasExcel.Modelos
                                       "congelada y con autofiltro puesto."
                     }
                 }
+            },
+
+            new SeccionGuia
+            {
+                Titulo = "7. Cuando un archivo no carga",
+                Resumen = "Cada archivo de la carpeta termina con un veredicto: ✅ cargado, ⚠ cargado con avisos o " +
+                          "❌ no cargado. El botón «🩺 Detalle de la carga» muestra qué pasó con cada uno y qué hacer; " +
+                          "si algún archivo no cargó, la ventana se abre sola. Estos son los problemas que reconoce.",
+                Entradas = CatalogoProblemas.OrdenParaLaGuia
+                    .Select(p => (p, e: CatalogoProblemas.De(p)))
+                    .Select(x => new EntradaGuia
+                    {
+                        Nombre = (DiagnosticoArchivo.EsError(x.p) ? "❌ " : "⚠ ") + x.e.Titulo,
+                        Descripcion = x.e.Sugerencia.Length == 0
+                            ? x.e.Explicacion
+                            : x.e.Explicacion + " Qué hacer: " + x.e.Sugerencia
+                    })
+                    .ToList()
             }
         };
 
