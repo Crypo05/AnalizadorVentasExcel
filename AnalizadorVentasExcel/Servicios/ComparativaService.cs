@@ -57,6 +57,8 @@ namespace AnalizadorVentasExcel.Servicios
     /// El código es la única llave fiable entre sucursales: las descripciones del mismo
     /// producto difieren de una tienda a otra ("PASTILLAS ALEVE GELS UND" contra
     /// "ALEVE GEL UND"), así que cruzar por nombre perdería la mayoría de los productos.
+    /// Las listas que no traen código ya llegan acá con el código resuelto por descripción
+    /// (<see cref="PreciosExcelService"/>), así que este motor no distingue cómo se cruzaron.
     /// Todo el cruce se resuelve con dos pasadas lineales sobre matrices densas
     /// código x sucursal indexadas por id, sin diccionarios por producto.
     /// </summary>
@@ -96,6 +98,15 @@ namespace AnalizadorVentasExcel.Servicios
                 : new[] { p.Metrica };
             int m = metricas.Length;
 
+            // Si la lista de cada sucursal trae el dato de cada métrica. Una lista sin «Porc.
+            // utilidad» (o con el costo con impuesto, que se ignora) no tiene ese dato: su
+            // celda queda "sin dato" y no entra al mínimo, al máximo ni a la diferencia, en
+            // vez de un 0 que la haría parecer la más barata o la de menor margen.
+            var disponible = new bool[m * cols];
+            for (int k = 0; k < m; k++)
+                for (int c = 0; c < cols; c++)
+                    disponible[k * cols + c] = _datos.Tiene(idsSucursal[c], metricas[k]);
+
             // --- Pasada 1: matriz densa código x métrica x sucursal ---
             int totalCodigos = _datos.Codigos.Count;
             var valores = new decimal[totalCodigos * m * cols];
@@ -133,24 +144,33 @@ namespace AnalizadorVentasExcel.Servicios
 
                 int basePresencia = codigo * cols;
                 decimal mayorPct = 0m, mayorAbs = 0m;
-                bool algunaDifiere = false, algunPctValido = false;
+                bool algunaDifiere = false, algunPctValido = false, comparable = false;
 
                 for (int k = 0; k < m; k++)
                 {
                     int baseValores = (codigo * m + k) * cols;
                     decimal minimo = decimal.MaxValue, maximo = decimal.MinValue;
+                    int conDato = 0;
                     for (int c = 0; c < cols; c++)
                     {
-                        if (!presente[basePresencia + c]) continue;
+                        if (!presente[basePresencia + c] || !disponible[k * cols + c]) continue;
                         decimal v = valores[baseValores + c];
                         if (v < minimo) minimo = v;
                         if (v > maximo) maximo = v;
+                        conDato++;
                     }
 
-                    decimal dif = maximo - minimo;
-                    decimal pct = minimo > 0m ? dif / minimo * 100m : 0m;
-                    resumen[k] = new ResumenMetrica(baseValores, minimo, maximo, dif, pct);
+                    // Con menos de dos sucursales con dato no hay diferencia que calcular. Cuando
+                    // todas las listas traen todas las columnas, conDato es la presencia del
+                    // producto y esto da exactamente lo mismo que antes.
+                    if (conDato == 0) { minimo = 0m; maximo = 0m; }
+                    bool valida = conDato >= 2;
+                    decimal dif = valida ? maximo - minimo : 0m;
+                    decimal pct = valida && minimo > 0m ? dif / minimo * 100m : 0m;
+                    resumen[k] = new ResumenMetrica(baseValores, minimo, maximo, dif, pct, conDato);
 
+                    if (!valida) continue;
+                    comparable = true;
                     if (dif != 0m) algunaDifiere = true;
                     if (dif > mayorAbs) mayorAbs = dif;
                     if (minimo > 0m)
@@ -160,13 +180,13 @@ namespace AnalizadorVentasExcel.Servicios
                     }
                 }
 
-                if (presentes >= 2)
+                if (comparable)
                 {
                     comparables++;
                     if (algunaDifiere) conDiferencia++;
                     if (algunPctValido) { sumaPct += mayorPct; conPct++; }
                 }
-                else exclusivos++;
+                else if (presentes < 2) exclusivos++;
 
                 // --- Filtros de la vista ---
                 bool pasaPresencia = p.Presencia switch
@@ -176,12 +196,12 @@ namespace AnalizadorVentasExcel.Servicios
                     _ => presentes >= 2
                 };
                 if (!pasaPresencia) continue;
-                if (p.SoloConDiferencia && (presentes < 2 || !algunaDifiere)) continue;
+                if (p.SoloConDiferencia && (!comparable || !algunaDifiere)) continue;
                 if (p.UmbralPct > 0m && mayorPct < p.UmbralPct) continue;
 
-                var fila = ConstruirFila(codigo, basePresencia, cols, presentes, valores, presente,
+                var fila = ConstruirFila(codigo, basePresencia, cols, presentes, valores, presente, disponible,
                                          descripcionId, nombresSucursal, metricas, resumen,
-                                         mayorPct, mayorAbs, busqueda);
+                                         comparable, mayorPct, mayorAbs, busqueda);
                 if (fila != null) filas.Add(fila);
             }
 
@@ -206,9 +226,9 @@ namespace AnalizadorVentasExcel.Servicios
         /// </summary>
         private FilaComparativa? ConstruirFila(
             int codigo, int basePresencia, int cols, int presentes,
-            decimal[] valores, bool[] presente, int[] descripcionId, List<string> nombresSucursal,
+            decimal[] valores, bool[] presente, bool[] disponible, int[] descripcionId, List<string> nombresSucursal,
             MetricaPrecio[] metricas, ResumenMetrica[] resumen,
-            decimal mayorPct, decimal mayorAbs, string? busqueda)
+            bool comparable, decimal mayorPct, decimal mayorAbs, string? busqueda)
         {
             int m = metricas.Length;
 
@@ -225,7 +245,7 @@ namespace AnalizadorVentasExcel.Servicios
             {
                 ref readonly var r = ref resumen[k];
                 bool mejorEsMayor = ConjuntoPrecios.MejorEsMayor(metricas[k]);
-                bool hayDiferencia = presentes >= 2 && r.Diferencia != 0m;
+                bool hayDiferencia = r.ConDato >= 2 && r.Diferencia != 0m;
                 decimal valorMejor = mejorEsMayor ? r.Maximo : r.Minimo;
                 decimal valorPeor = mejorEsMayor ? r.Minimo : r.Maximo;
 
@@ -236,6 +256,15 @@ namespace AnalizadorVentasExcel.Servicios
                     if (!presente[basePresencia + c])
                     {
                         textos[destino] = "—";
+                        colores[destino] = FilaComparativa.ColorAusente;
+                        listaValores[destino] = null;
+                        continue;
+                    }
+
+                    if (!disponible[k * cols + c])
+                    {
+                        // El producto está en la sucursal, pero su lista no trae esta columna.
+                        textos[destino] = FilaComparativa.TextoSinDato;
                         colores[destino] = FilaComparativa.ColorAusente;
                         listaValores[destino] = null;
                         continue;
@@ -275,9 +304,9 @@ namespace AnalizadorVentasExcel.Servicios
                 else if (!distintas && !CoincidenNombres(descripcion, nombre)) distintas = true;
             }
 
+            string codigoTexto = ConjuntoPrecios.TextoCodigo(_datos.Codigos[codigo]);
             if (busqueda != null)
             {
-                string codigoTexto = _datos.Codigos[codigo];
                 bool coincide = CeldasExcel.Normalizar(codigoTexto).Contains(busqueda, StringComparison.Ordinal);
                 if (!coincide)
                     foreach (string d in detalle)
@@ -291,14 +320,18 @@ namespace AnalizadorVentasExcel.Servicios
 
             // La primera métrica manda en las columnas de siempre (con la vista combinada,
             // el costo); la segunda, cuando existe, va a las columnas de venta.
+            // Con todas las columnas en todas las listas, "con dato en dos o más" es lo mismo
+            // que "presente en dos o más", que es lo que se miraba antes.
             var principal = resumen[0];
-            bool difPrincipal = presentes >= 2 && principal.Diferencia != 0m;
+            bool validaPrincipal = principal.ConDato >= 2;
+            bool difPrincipal = validaPrincipal && principal.Diferencia != 0m;
             var secundaria = m > 1 ? resumen[1] : default;
-            bool difSecundaria = m > 1 && presentes >= 2 && secundaria.Diferencia != 0m;
+            bool validaSecundaria = m > 1 && secundaria.ConDato >= 2;
+            bool difSecundaria = validaSecundaria && secundaria.Diferencia != 0m;
 
             return new FilaComparativa
             {
-                Codigo = _datos.Codigos[codigo],
+                Codigo = codigoTexto,
                 Descripcion = descripcion,
                 DetalleDescripciones = string.Join("  •  ", detalle),
                 DescripcionesDistintas = distintas,
@@ -307,25 +340,27 @@ namespace AnalizadorVentasExcel.Servicios
                 Colores = colores,
                 Presencia = presentes,
                 PresenciaTexto = $"{presentes}/{cols}",
+                ComparablePrincipal = validaPrincipal,
+                ComparableVenta = validaSecundaria,
                 Aviso = aviso,
                 Minimo = principal.Minimo,
                 Maximo = principal.Maximo,
                 Diferencia = difPrincipal ? principal.Diferencia : 0m,
                 DiferenciaPct = difPrincipal ? principal.DiferenciaPct : 0m,
-                DiferenciaTexto = presentes < 2 ? "-" : FilaComparativa.Formatear(principal.Diferencia, metricas[0]),
-                DiferenciaPctTexto = presentes < 2 ? "-"
+                DiferenciaTexto = !validaPrincipal ? "-" : FilaComparativa.Formatear(principal.Diferencia, metricas[0]),
+                DiferenciaPctTexto = !validaPrincipal ? "-"
                                    : principal.Minimo > 0m ? FilaComparativa.FormatearPorcentaje(principal.DiferenciaPct)
                                    : "-",
                 DiferenciaVenta = difSecundaria ? secundaria.Diferencia : 0m,
                 DiferenciaVentaPct = difSecundaria ? secundaria.DiferenciaPct : 0m,
-                DiferenciaVentaTexto = m < 2 || presentes < 2 ? "-" : FilaComparativa.Formatear(secundaria.Diferencia, metricas[1]),
-                DiferenciaVentaPctTexto = m < 2 || presentes < 2 ? "-"
+                DiferenciaVentaTexto = !validaSecundaria ? "-" : FilaComparativa.Formatear(secundaria.Diferencia, metricas[1]),
+                DiferenciaVentaPctTexto = !validaSecundaria ? "-"
                                         : secundaria.Minimo > 0m ? FilaComparativa.FormatearPorcentaje(secundaria.DiferenciaPct)
                                         : "-",
-                DiferenciaMayorPct = presentes < 2 ? 0m : mayorPct,
-                DiferenciaMayorAbs = presentes < 2 ? 0m : mayorAbs,
-                Mejor = presentes < 2 ? "-" : !difPrincipal ? "Todas iguales" : string.Join(", ", mejores),
-                Peor = presentes < 2 || !difPrincipal ? "-" : string.Join(", ", peores)
+                DiferenciaMayorPct = !comparable ? 0m : mayorPct,
+                DiferenciaMayorAbs = !comparable ? 0m : mayorAbs,
+                Mejor = !validaPrincipal ? "-" : !difPrincipal ? "Todas iguales" : string.Join(", ", mejores),
+                Peor = !validaPrincipal || !difPrincipal ? "-" : string.Join(", ", peores)
             };
         }
 
@@ -335,11 +370,14 @@ namespace AnalizadorVentasExcel.Servicios
             public readonly int BaseValores;
             public readonly decimal Minimo, Maximo, Diferencia, DiferenciaPct;
 
+            /// <summary>Sucursales con el producto y con el dato de esta métrica.</summary>
+            public readonly int ConDato;
+
             public ResumenMetrica(int baseValores, decimal minimo, decimal maximo,
-                                  decimal diferencia, decimal diferenciaPct)
+                                  decimal diferencia, decimal diferenciaPct, int conDato)
             {
                 BaseValores = baseValores; Minimo = minimo; Maximo = maximo;
-                Diferencia = diferencia; DiferenciaPct = diferenciaPct;
+                Diferencia = diferencia; DiferenciaPct = diferenciaPct; ConDato = conDato;
             }
         }
 
@@ -354,21 +392,7 @@ namespace AnalizadorVentasExcel.Servicios
         /// mayúsculas o espacios de más. Todo lo demás se marca para que el usuario lo revise.
         /// </summary>
         private static bool CoincidenNombres(string a, string b)
-            => string.Equals(Compactar(a), Compactar(b), StringComparison.Ordinal);
-
-        private static string Compactar(string texto)
-        {
-            string n = CeldasExcel.Normalizar(texto);
-            var sb = new System.Text.StringBuilder(n.Length);
-            bool espacio = false;
-            foreach (char c in n)
-            {
-                if (char.IsWhiteSpace(c)) { espacio = sb.Length > 0; continue; }
-                if (espacio) { sb.Append(' '); espacio = false; }
-                sb.Append(c);
-            }
-            return sb.ToString();
-        }
+            => string.Equals(CeldasExcel.Compactar(a), CeldasExcel.Compactar(b), StringComparison.Ordinal);
 
         private static void Ordenar(List<FilaComparativa> filas, OrdenComparativa orden)
         {

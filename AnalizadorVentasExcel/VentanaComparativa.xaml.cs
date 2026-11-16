@@ -26,7 +26,8 @@ namespace AnalizadorVentasExcel
     /// No comparte datos con el analizador de ventas. Lee otros archivos (las listas de
     /// precios que exporta la caja: código, descripción, costo, impuesto, utilidad y precio
     /// IVI) y cruza los productos por código de artículo, que es la única llave fiable:
-    /// la descripción del mismo producto cambia de una tienda a otra.
+    /// la descripción del mismo producto cambia de una tienda a otra. Una lista sin código
+    /// se cruza por descripción como respaldo, y mientras esté cargada la ventana lo avisa.
     /// </summary>
     public partial class VentanaComparativa : Window
     {
@@ -140,6 +141,7 @@ namespace AnalizadorVentasExcel
                 }
 
                 _motor = new ComparativaService(resultado.Datos);
+                MostrarAvisoCruce(resultado.Datos);
 
                 int noCargados = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.NoCargado);
                 int conAvisos = resultado.Diagnosticos.Count(d => d.Estado == EstadoCarga.ConAvisos);
@@ -186,6 +188,24 @@ namespace AnalizadorVentasExcel
             }
         }
 
+        /// <summary>
+        /// Aviso fijo arriba de la tabla mientras alguna lista esté cruzada por descripción:
+        /// qué sucursales, el riesgo de incongruencias y cuántos productos se cruzaron. Se
+        /// oculta sólo al cargar otra carpeta (<see cref="LimpiarVista"/>).
+        /// </summary>
+        private void MostrarAvisoCruce(ConjuntoPrecios datos)
+        {
+            if (!datos.HayCrucePorDescripcion)
+            {
+                PanelAvisoCruce.Visibility = Visibility.Collapsed;
+                TxtAvisoCruce.Text = string.Empty;
+                return;
+            }
+
+            TxtAvisoCruce.Text = AvisoCruce.Texto(datos.CrucesPorDescripcion);
+            PanelAvisoCruce.Visibility = Visibility.Visible;
+        }
+
         private void Estado(string texto, Brush color)
         {
             TxtEstadoArchivo.Text = texto;
@@ -229,6 +249,8 @@ namespace AnalizadorVentasExcel
             foreach (var t in new[] { TxtComparables, TxtConDiferencia, TxtIguales, TxtExclusivos, TxtPromedio })
                 t.Text = "-";
             BtnExportar.IsEnabled = false;
+            PanelAvisoCruce.Visibility = Visibility.Collapsed;
+            TxtAvisoCruce.Text = string.Empty;
         }
 
         // ==========================================
@@ -310,7 +332,10 @@ namespace AnalizadorVentasExcel
 
             try
             {
-                ExportadorExcel.ExportarComparativa(dialogo.FileName, _filas, _sucursalesComparadas, _metricaVista);
+                // El aviso de cruce por descripción viaja con el archivo: quien lo abra después
+                // no ve la ventana, y sin él leería como exactos cruces que no lo son.
+                var aviso = _motor != null ? AvisoCruce.Lineas(_motor.Datos.CrucesPorDescripcion) : null;
+                ExportadorExcel.ExportarComparativa(dialogo.FileName, _filas, _sucursalesComparadas, _metricaVista, aviso);
 
                 Estado($"Exportados {_filas.Count.ToString("N0", ResumenDinamico.FormatoCR)} productos a " +
                        $"{Path.GetFileName(dialogo.FileName)}", Brushes.Green);

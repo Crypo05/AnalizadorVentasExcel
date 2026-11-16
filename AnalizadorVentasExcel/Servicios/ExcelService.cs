@@ -205,6 +205,7 @@ namespace AnalizadorVentasExcel.Servicios
             List<string>? mejorReconocidas = null;
             Columnas mejorCol = Columnas.Vacias;
             bool pareceDePrecios = false;
+            List<string> filaDePrecios = new();
             bool algunaFila = false;
 
             int indiceHoja = 0;
@@ -218,16 +219,24 @@ namespace AnalizadorVentasExcel.Servicios
                     algunaFila = true;
                     if (++filasInspeccionadas > 20) break;
 
-                    // La firma del otro sistema se mira ANTES de aceptar el encabezado, por
-                    // simetría con el lector de precios: ninguna lista de precios trae «Año
-                    // mes» ni «Familia», así que la comprobación es segura.
-                    if (PareceEncabezadoPrecios(TextosDeFila(reader))) { pareceDePrecios = true; break; }
-
+                    // Primero el encabezado propio y después la firma del otro sistema. Al
+                    // revés, un reporte de ventas que además trae «Cód. Artículo» y «Precio
+                    // costo» se rechazaba como lista de precios aunque tuviera «Año mes»,
+                    // «Familia» y «Total». Ninguna lista de precios trae «Total» y «Familia»
+                    // juntos, así que aceptar primero el propio no deja pasar una lista.
                     var candidata = DetectarEncabezado(reader, out var reconocidas);
                     if (candidata.Completo)
                     {
                         col = candidata; encontrado = true;
                         hojaUsada = indiceHoja; nombreHoja = reader.Name ?? string.Empty;
+                        break;
+                    }
+
+                    var textos = TextosDeFila(reader);
+                    if (PareceEncabezadoPrecios(textos))
+                    {
+                        pareceDePrecios = true;
+                        filaDePrecios = textos;
                         break;
                     }
 
@@ -246,8 +255,8 @@ namespace AnalizadorVentasExcel.Servicios
             {
                 if (pareceDePrecios)
                     diag.Registrar(ProblemaCarga.ReporteDelOtroSistema,
-                        "Es un reporte de precios, no de ventas: tiene «Cód. Artículo» y «Precio IVI».",
-                        "Cargalo en ⚖️ Comparativa de Precios, no en esta ventana.");
+                        PreciosExcelService.DescribirListaParaVentas(filaDePrecios),
+                        "Cargala con el botón «Comparativa de Precios» de esta ventana, no con «Seleccionar Carpeta».");
                 else if (!algunaFila)
                     diag.Registrar(ProblemaCarga.ArchivoVacio, "El archivo no tiene ninguna fila con datos.");
                 else if (mejorReconocidas == null || mejorReconocidas.Count == 0)
@@ -260,9 +269,13 @@ namespace AnalizadorVentasExcel.Servicios
                     if (mejorCol.Total == -1) faltan.Add("«Total»");
                     if (mejorCol.Fam == -1) faltan.Add("«Familia»");
                     string donde = indiceHoja > 1 && mejorHoja.Length > 0 ? $" de la hoja «{mejorHoja}»" : string.Empty;
+                    string columnasQueFaltan = string.Join(" y ", faltan);
+                    // El encabezado está (es la fila que se señala): hablar de un título largo
+                    // encima no ayuda. Lo que hay que hacer es exportar con la columna que falta.
                     diag.Registrar(ProblemaCarga.SinEncabezado,
                         $"No hay un encabezado completo en las primeras 20 filas. La fila {mejorFila}{donde} se parece: " +
-                        $"tiene {string.Join(", ", mejorReconocidas.Select(r => $"«{r}»"))}, pero falta {string.Join(" y ", faltan)}.");
+                        $"tiene {string.Join(", ", mejorReconocidas.Select(r => $"«{r}»"))}, pero falta {columnasQueFaltan}.",
+                        $"Si es un reporte de ventas, volvé a exportarlo desde la caja incluyendo {columnasQueFaltan}.");
                 }
                 return lista;
             }

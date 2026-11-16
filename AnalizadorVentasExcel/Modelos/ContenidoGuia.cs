@@ -296,7 +296,13 @@ namespace AnalizadorVentasExcel.Modelos
                                       "encabezado: \"Cód. Artículo\", \"Descripción\", \"Precio costo\", \"Imp. ventas\", " +
                                       "\"Porc. utilidad - artículo\" y \"Precio IVI - artículo\". Poné una lista por sucursal " +
                                       "en una misma carpeta y elegí cualquiera de ellas: se cargan todas. Si algún archivo " +
-                                      "no tiene ese encabezado, se ignora y el programa te dice cuál."
+                                      "no tiene ese encabezado, se ignora y el programa te dice cuál. Una lista sin " +
+                                      "\"Cód. Artículo\" se carga igual y se cruza por descripción (el mismo nombre, sin " +
+                                      "importar tildes, mayúsculas ni espacios de más), con un aviso fijo arriba de la tabla " +
+                                      "porque puede haber incongruencias; sus descripciones repetidas quedan fuera. Si a una " +
+                                      "lista le falta el costo o la utilidad, esa columna dice \"sin dato\" en su sucursal en " +
+                                      "vez de mostrar un 0. \"Costo I.V.A.\" se ignora: es el costo con impuesto y no se puede " +
+                                      "comparar con el \"Precio costo\" de las demás."
                     },
                     new EntradaGuia
                     {

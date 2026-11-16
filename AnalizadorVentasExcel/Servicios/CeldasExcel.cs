@@ -89,34 +89,113 @@ namespace AnalizadorVentasExcel.Servicios
         }
 
         /// <summary>
-        /// Firma del reporte de precios (Cód. Artículo + Precio IVI o Precio costo). Se usa
-        /// desde el lector de VENTAS para avisar que el archivo es del otro sistema, que es
-        /// el error más común: los dos leen "cualquier Excel de la carpeta".
+        /// Textos de la fila actual por posición de columna (vacío donde no hay nada). A
+        /// diferencia de <see cref="TextosDeFila"/>, conserva el índice: es lo que necesitan
+        /// los detectores de encabezado para saber en qué columna está cada dato.
+        /// </summary>
+        internal static string[] CeldasDeFila(IExcelDataReader reader)
+        {
+            var celdas = new string[reader.FieldCount];
+            for (int c = 0; c < celdas.Length; c++) celdas[c] = Texto(reader, c).Trim();
+            return celdas;
+        }
+
+        /// <summary>
+        /// Firma de una lista de precios, para que el lector de VENTAS avise que el archivo es
+        /// del otro sistema, que es el error más común: los dos leen "cualquier Excel de la
+        /// carpeta". Basta una columna que identifique el producto (código o descripción) y
+        /// otra de importe (precio, costo o IVI), en celdas distintas. No cuenta si la fila
+        /// trae «Año mes» o «Total»: eso es de ventas, aunque le falte otra columna.
+        ///
+        /// Antes pedía «Cód. Artículo» más «Precio IVI» o «Precio costo», y una lista exportada
+        /// con otras columnas («Descripción artículo», «Precio venta I.V.A.», «Costo I.V.A.»)
+        /// se tomaba por un reporte de ventas incompleto al que le "faltaba Total".
         /// </summary>
         internal static bool PareceEncabezadoPrecios(IReadOnlyList<string> celdas)
+            => PareceEncabezadoPrecios(celdas, out _);
+
+        internal static bool PareceEncabezadoPrecios(IReadOnlyList<string> celdas, out List<string> encontradas)
         {
-            bool codigo = false, precio = false;
+            encontradas = new List<string>();
+            bool identificador = false, importe = false;
             foreach (string celda in celdas)
             {
                 string n = Normalizar(celda);
-                if (n.Contains("cod", StringComparison.Ordinal) && n.Contains("art", StringComparison.Ordinal)) codigo = true;
-                if (n.Contains("ivi", StringComparison.Ordinal) || n.Contains("precio costo", StringComparison.Ordinal)) precio = true;
+                if (n.Length == 0) continue;
+                if (EsColumnaDeVentas(n)) { encontradas.Clear(); return false; }
+
+                bool id = n.Contains("cod", StringComparison.Ordinal) || n.Contains("descrip", StringComparison.Ordinal);
+                bool monto = n.Contains("ivi", StringComparison.Ordinal) || n.Contains("precio", StringComparison.Ordinal) ||
+                             n.Contains("costo", StringComparison.Ordinal);
+                if (!id && !monto) continue;
+
+                encontradas.Add(celda.Trim());
+                identificador |= id;
+                importe |= monto;
             }
-            return codigo && precio;
+
+            bool parece = identificador && importe && encontradas.Count >= 2;
+            if (!parece) encontradas.Clear();
+            return parece;
         }
+
+        /// <summary>«Año mes» o «Total»: columnas que sólo trae el reporte de ventas.</summary>
+        private static bool EsColumnaDeVentas(string normalizado)
+            => normalizado == "total" || normalizado == "total venta" || normalizado == "mes" || normalizado == "ano" ||
+               (normalizado.Contains("ano", StringComparison.Ordinal) && normalizado.Contains("mes", StringComparison.Ordinal));
 
         /// <summary>Firma del reporte de ventas (Año mes + Total + Familia), para el lector de precios.</summary>
         internal static bool PareceEncabezadoVentas(IReadOnlyList<string> celdas)
+            => PareceEncabezadoVentas(celdas, out _);
+
+        internal static bool PareceEncabezadoVentas(IReadOnlyList<string> celdas, out List<string> encontradas)
         {
+            encontradas = new List<string>();
             bool fecha = false, total = false, familia = false;
             foreach (string celda in celdas)
             {
                 string n = Normalizar(celda);
-                if (n.Contains("ano", StringComparison.Ordinal) || n == "mes") fecha = true;
-                if (n == "total" || n == "total venta") total = true;
-                if (n.Contains("familia", StringComparison.Ordinal)) familia = true;
+                bool esFecha = n.Contains("ano", StringComparison.Ordinal) || n == "mes";
+                bool esTotal = n == "total" || n == "total venta";
+                bool esFamilia = n.Contains("familia", StringComparison.Ordinal);
+                if (esFecha || esTotal || esFamilia) encontradas.Add(celda.Trim());
+                fecha |= esFecha; total |= esTotal; familia |= esFamilia;
             }
-            return total && familia && fecha;
+            bool parece = total && familia && fecha;
+            if (!parece) encontradas.Clear();
+            return parece;
+        }
+
+        /// <summary>
+        /// Si el encabezado dice que el importe trae el impuesto incluido: «Costo I.V.A.»,
+        /// «Costo IVA», «Costo IVI». Se mira por palabras, sin los puntos de la sigla.
+        /// </summary>
+        internal static bool TieneMarcaDeImpuesto(string normalizado)
+        {
+            string sinPuntos = normalizado.Replace(".", string.Empty);
+            foreach (string palabra in sinPuntos.Split(SeparadoresDePalabra, StringSplitOptions.RemoveEmptyEntries))
+                if (palabra == "iva" || palabra == "ivi") return true;
+            return false;
+        }
+
+        private static readonly char[] SeparadoresDePalabra = { ' ', '-', '_', '/', '(', ')', '+', ':', ',', ';' };
+
+        /// <summary>
+        /// Forma de comparar descripciones entre listas: sin tildes, sin mayúsculas y con los
+        /// espacios de más colapsados. Es igualdad exacta después de eso; nada aproximado.
+        /// </summary>
+        internal static string Compactar(string texto)
+        {
+            string n = Normalizar(texto);
+            var sb = new StringBuilder(n.Length);
+            bool espacio = false;
+            foreach (char c in n)
+            {
+                if (char.IsWhiteSpace(c)) { espacio = sb.Length > 0; continue; }
+                if (espacio) { sb.Append(' '); espacio = false; }
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         /// <summary>
