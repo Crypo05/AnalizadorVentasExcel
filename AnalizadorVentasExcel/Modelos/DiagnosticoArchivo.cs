@@ -25,6 +25,7 @@ namespace AnalizadorVentasExcel.Modelos
         HojaEquivocada = 11,
         EncabezadoIncompleto = 12,
         SucursalDuplicada = 13,
+        CruceSinCodigo = 14,
 
         // --- Errores: el archivo no se cargó ---
         SinFilasUtiles = 20,
@@ -147,14 +148,29 @@ namespace AnalizadorVentasExcel.Modelos
                 Titulo = "No se encontró el encabezado",
                 Explicacion = "En las primeras 20 filas con datos no hay ninguna que tenga todas las columnas " +
                               "obligatorias. El mensaje señala la fila que más se parece y qué columna le falta.",
-                Sugerencia = "Revisá que el reporte se haya exportado con todas las columnas y que el encabezado " +
-                             "esté al principio de la hoja, no después de un título largo."
+                Sugerencia = "Revisá que el archivo sea el reporte que corresponde a esta ventana y que se haya " +
+                             "exportado desde la caja con todas sus columnas. Si trae un título encima, el encabezado " +
+                             "tiene que quedar dentro de las primeras 20 filas."
+            },
+            [ProblemaCarga.CruceSinCodigo] = new()
+            {
+                Titulo = "La lista se cruzó por descripción",
+                Explicacion = "La lista de precios no trae «Cód. Artículo», así que sus productos se cruzan con los " +
+                              "de las otras sucursales por la descripción: tiene que ser el mismo nombre, sin " +
+                              "importar tildes, mayúsculas ni espacios de más. Puede haber incongruencias: dos " +
+                              "productos distintos con el mismo nombre quedan como uno solo, y un mismo producto " +
+                              "con otro nombre en otra sucursal no se cruza. Las descripciones repetidas dentro de " +
+                              "la lista quedan fuera. El aviso queda arriba de la tabla mientras la lista esté cargada.",
+                Sugerencia = "Revisá en la tabla los productos de esa sucursal antes de sacar conclusiones. Para un " +
+                             "cruce exacto, exportá la lista desde la caja con la columna «Cód. Artículo»."
             },
             [ProblemaCarga.EncabezadoIncompleto] = new()
             {
                 Titulo = "Falta una columna opcional",
                 Explicacion = "El archivo se carga igual, pero sin esa columna: por ejemplo, sin \"% Utilidad\" " +
-                              "todo entra con utilidad 0, y sin \"Proveedor\" todo queda como \"General\".",
+                              "todo entra con utilidad 0, y sin \"Proveedor\" todo queda como \"General\". En la " +
+                              "comparativa de precios el mensaje lista todas las columnas que faltan juntas, y la que " +
+                              "falta queda vacía (\"sin dato\") para esa sucursal en vez de mostrarse en 0.",
                 Sugerencia = "Si necesitás ese dato, volvé a exportar el reporte con esa columna incluida."
             },
             [ProblemaCarga.NoEsExcel] = new()
@@ -253,6 +269,7 @@ namespace AnalizadorVentasExcel.Modelos
             ProblemaCarga.ArchivoEnUso,
             ProblemaCarga.NoEsExcel,
             ProblemaCarga.FilasDescartadas,
+            ProblemaCarga.CruceSinCodigo,
             ProblemaCarga.SinFilasUtiles,
             ProblemaCarga.EncabezadoIncompleto,
             ProblemaCarga.HojaEquivocada,

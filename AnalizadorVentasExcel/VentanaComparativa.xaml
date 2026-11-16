@@ -140,7 +140,7 @@
                             Click="BtnExportar_Click" Background="#16A085" Foreground="White"
                             FontWeight="Bold" Cursor="Hand" IsEnabled="False"
                             ToolTip="Guarda en .xlsx exactamente los productos y las columnas que muestra la tabla"/>
-                    <TextBlock Text="Verde: mejor valor  •  Rojo: peor valor  •  —: no está en esa sucursal"
+                    <TextBlock Text="Verde: mejor valor  •  Rojo: peor valor  •  —: no está en esa sucursal  •  sin dato: la lista de esa sucursal no trae esa columna"
                                FontSize="9" Foreground="#7F8C8D" TextWrapping="Wrap"/>
                 </StackPanel>
             </Grid>
@@ -160,6 +160,13 @@
                            FontSize="20" FontWeight="Bold" Foreground="#34495E"/>
                 <TextBlock x:Name="TxtSubtitulo" Text="Cargue una carpeta con las listas de precios de cada sucursal para empezar."
                            FontSize="14" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+
+                <!-- Visible mientras haya una lista cruzada por descripción (sin código): no se
+                     cierra ni se oculta solo, porque cambia cómo hay que leer toda la tabla. -->
+                <Border x:Name="PanelAvisoCruce" Visibility="Collapsed" Margin="0,8,0,0" Padding="12,8"
+                        Background="#FEF5E7" BorderBrush="#E59866" BorderThickness="1" CornerRadius="3">
+                    <TextBlock x:Name="TxtAvisoCruce" TextWrapping="Wrap" FontSize="12" Foreground="#7E5109"/>
+                </Border>
             </StackPanel>
 
             <Border Grid.Row="1" Background="#F8F9F9" BorderBrush="#E5E7E9" BorderThickness="1"

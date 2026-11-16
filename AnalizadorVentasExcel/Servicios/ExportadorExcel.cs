@@ -32,12 +32,19 @@ namespace AnalizadorVentasExcel.Servicios
         private const int EstiloUtilidad = 3;
         private const int EstiloPorcentaje = 4;
         private const int EstiloTexto = 5;
+        private const int EstiloAviso = 6;
 
+        /// <param name="aviso">
+        /// Renglones que van arriba de la tabla, antes del encabezado: el aviso de que alguna
+        /// lista se cruzó por descripción. Sin aviso la hoja sale igual que siempre, con el
+        /// encabezado en la fila 1.
+        /// </param>
         public static void ExportarComparativa(string ruta, IReadOnlyList<FilaComparativa> filas,
-                                               IReadOnlyList<string> sucursales, MetricaPrecio metrica)
+                                               IReadOnlyList<string> sucursales, MetricaPrecio metrica,
+                                               IReadOnlyList<string>? aviso = null)
         {
             var encabezados = Encabezados(sucursales, metrica);
-            string hoja = ConstruirHoja(filas, sucursales, metrica, encabezados);
+            string hoja = ConstruirHoja(filas, sucursales, metrica, encabezados, aviso ?? Array.Empty<string>());
 
             // Se escribe a un temporal y se mueve al final: si algo falla a mitad de camino,
             // el archivo que el usuario ya tenía no queda pisado ni a medias.
@@ -97,13 +104,17 @@ namespace AnalizadorVentasExcel.Servicios
 
         private static string ConstruirHoja(IReadOnlyList<FilaComparativa> filas,
                                             IReadOnlyList<string> sucursales, MetricaPrecio metrica,
-                                            List<string> encabezados)
+                                            List<string> encabezados, IReadOnlyList<string> aviso)
         {
             bool combinada = ConjuntoPrecios.EsCombinada(metrica);
             int estiloValor = metrica == MetricaPrecio.Utilidad ? EstiloUtilidad : EstiloMoneda;
             int porSucursal = combinada ? 2 : 1;
             int columnas = encabezados.Count;
-            int totalFilas = filas.Count + 1;
+
+            // Con aviso, sus renglones ocupan las primeras filas y dejan una en blanco antes
+            // del encabezado. Sin aviso, el encabezado queda en la fila 1 como siempre.
+            int filaEncabezado = aviso.Count > 0 ? aviso.Count + 2 : 1;
+            int totalFilas = filas.Count + filaEncabezado;
 
             var sb = new StringBuilder(filas.Count * 320 + 2048);
             sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -111,9 +122,10 @@ namespace AnalizadorVentasExcel.Servicios
             sb.Append("<dimension ref=\"A1:").Append(Columna(columnas - 1)).Append(totalFilas).Append("\"/>");
 
             // La fila de encabezados queda fija al desplazarse, que con miles de productos
-            // es la diferencia entre poder leer la hoja y no.
+            // es la diferencia entre poder leer la hoja y no. Con aviso, queda fijo también.
             sb.Append("<sheetViews><sheetView workbookViewId=\"0\">");
-            sb.Append("<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>");
+            sb.Append("<pane ySplit=\"").Append(filaEncabezado).Append("\" topLeftCell=\"A").Append(filaEncabezado + 1)
+              .Append("\" activePane=\"bottomLeft\" state=\"frozen\"/>");
             sb.Append("</sheetView></sheetViews>");
             sb.Append("<sheetFormatPr defaultRowHeight=\"15\"/>");
 
@@ -125,15 +137,22 @@ namespace AnalizadorVentasExcel.Servicios
 
             sb.Append("<sheetData>");
 
-            sb.Append("<row r=\"1\">");
+            for (int i = 0; i < aviso.Count; i++)
+            {
+                sb.Append("<row r=\"").Append(i + 1).Append("\">");
+                CeldaTexto(sb, 0, i + 1, aviso[i], EstiloAviso);
+                sb.Append("</row>");
+            }
+
+            sb.Append("<row r=\"").Append(filaEncabezado).Append("\">");
             for (int c = 0; c < encabezados.Count; c++)
-                CeldaTexto(sb, c, 1, encabezados[c], EstiloEncabezado);
+                CeldaTexto(sb, c, filaEncabezado, encabezados[c], EstiloEncabezado);
             sb.Append("</row>");
 
             for (int i = 0; i < filas.Count; i++)
             {
                 var f = filas[i];
-                int fila = i + 2;
+                int fila = i + filaEncabezado + 1;
                 int c = 0;
 
                 sb.Append("<row r=\"").Append(fila).Append("\">");
@@ -149,7 +168,9 @@ namespace AnalizadorVentasExcel.Servicios
                     if (valor.HasValue) CeldaNumero(sb, c, fila, valor.Value, estiloValor);
                 }
 
-                bool comparable = f.Presencia >= 2;
+                // Sin dos sucursales con dato no hay diferencia: la celda queda en blanco y no
+                // en 0. Con todas las columnas en todas las listas equivale a Presencia >= 2.
+                bool comparable = f.ComparablePrincipal;
                 if (comparable) CeldaNumero(sb, c, fila, f.Diferencia, estiloValor);
                 c++;
 
@@ -160,9 +181,10 @@ namespace AnalizadorVentasExcel.Servicios
                 {
                     // La segunda diferencia sólo existe en la vista combinada, y se escribe
                     // con el mismo criterio: en blanco cuando no hay con qué comparar.
-                    if (comparable) CeldaNumero(sb, c, fila, f.DiferenciaVenta, estiloValor);
+                    bool comparableVenta = f.ComparableVenta;
+                    if (comparableVenta) CeldaNumero(sb, c, fila, f.DiferenciaVenta, estiloValor);
                     c++;
-                    if (comparable && f.DiferenciaVentaPctTexto != "-")
+                    if (comparableVenta && f.DiferenciaVentaPctTexto != "-")
                         CeldaNumero(sb, c, fila, f.DiferenciaVentaPct, EstiloPorcentaje);
                     c++;
                 }
@@ -179,7 +201,8 @@ namespace AnalizadorVentasExcel.Servicios
             }
 
             sb.Append("</sheetData>");
-            sb.Append("<autoFilter ref=\"A1:").Append(Columna(columnas - 1)).Append(totalFilas).Append("\"/>");
+            sb.Append("<autoFilter ref=\"A").Append(filaEncabezado).Append(':')
+              .Append(Columna(columnas - 1)).Append(totalFilas).Append("\"/>");
             sb.Append("</worksheet>");
             return sb.ToString();
         }
@@ -292,9 +315,10 @@ namespace AnalizadorVentasExcel.Servicios
             "<numFmt numFmtId=\"165\" formatCode=\"0.00&quot; %&quot;\"/>" +
             "<numFmt numFmtId=\"166\" formatCode=\"0.0&quot; %&quot;\"/>" +
             "</numFmts>" +
-            "<fonts count=\"2\">" +
+            "<fonts count=\"3\">" +
             "<font><sz val=\"11\"/><color rgb=\"FF000000\"/><name val=\"Calibri\"/></font>" +
             "<font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/><name val=\"Calibri\"/></font>" +
+            "<font><b/><sz val=\"11\"/><color rgb=\"FF9C640C\"/><name val=\"Calibri\"/></font>" +
             "</fonts>" +
             "<fills count=\"3\">" +
             "<fill><patternFill patternType=\"none\"/></fill>" +
@@ -303,13 +327,14 @@ namespace AnalizadorVentasExcel.Servicios
             "</fills>" +
             "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
             "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-            "<cellXfs count=\"6\">" +
+            "<cellXfs count=\"7\">" +
             "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +
             "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" +
             "<xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>" +
             "<xf numFmtId=\"165\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>" +
             "<xf numFmtId=\"166\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>" +
             "<xf numFmtId=\"49\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>" +
+            "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>" +
             "</cellXfs>" +
             "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>" +
             "</styleSheet>";
